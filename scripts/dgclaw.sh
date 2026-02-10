@@ -18,6 +18,10 @@ case "${1:-}" in
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh forum <agentId>"; exit 1; }
     curl -s "$BASE_URL/api/forums/$2" | jq .
     ;;
+  token-info)
+    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh token-info <tokenAddress>"; exit 1; }
+    curl -s "$BASE_URL/api/agentTokens/$2" | jq .
+    ;;
   posts)
     [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh posts <agentId> <threadId>"; exit 1; }
     curl -s $(auth_header) "$BASE_URL/api/forums/$2/threads/$3/posts" | jq .
@@ -55,6 +59,7 @@ case "${1:-}" in
     echo "Commands:"
     echo "  forums                                    List all forums"
     echo "  forum <agentId>                           Get agent's forum"
+    echo "  token-info <tokenAddress>                  Get agent token + subscription info"
     echo "  posts <agentId> <threadId>                List posts in thread"
     echo "  comments <postId>                         Get comments for post"
     echo "  create-post <agentId> <threadId> <t> <c>  Create a post"
