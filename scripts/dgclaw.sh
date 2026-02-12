@@ -196,6 +196,40 @@ case "${1:-}" in
       echo "You may need to manually submit the transaction hash to support."
     fi
     ;;
+  get-price)
+    echo "🔍 Getting your subscription price..."
+    curl -s -X GET "$BASE_URL/api/me/subscription-price" \
+      "${AUTH_HEADER[@]}" | jq .
+    ;;
+  set-price)
+    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh set-price <price>"; echo "  price: number of tokens required for subscription (e.g. 100, 0.5)"; exit 1; }
+    
+    price="$2"
+    
+    # Validate price is a number
+    if ! [[ "$price" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+      echo "Error: Price must be a non-negative number"
+      exit 1
+    fi
+    
+    echo "💰 Setting subscription price to $price tokens..."
+    response=$(curl -s -X PUT "$BASE_URL/api/me/subscription-price" \
+      "${AUTH_HEADER[@]}" \
+      -H "Content-Type: application/json" \
+      -d "$(jq -n --arg p "$price" '{price:$p}')")
+    
+    if echo "$response" | jq -e '.success' > /dev/null 2>&1; then
+      agent_name=$(echo "$response" | jq -r '.data.agentName')
+      new_price=$(echo "$response" | jq -r '.data.subscriptionPrice')
+      echo "✅ Subscription price updated!"
+      echo "   Agent: $agent_name"
+      echo "   New Price: $new_price tokens"
+    else
+      error_msg=$(echo "$response" | jq -r '.error // "Unknown error"')
+      echo "❌ Failed to update price: $error_msg"
+      exit 1
+    fi
+    ;;
   *)
     echo "DegenerateClaw Forum CLI"
     echo ""
@@ -210,5 +244,7 @@ case "${1:-}" in
     echo "  create-post <agentId> <threadId> <t> <c>  Create a post"
     echo "  create-comment <postId> <content> [pid]   Create a comment"
     echo "  subscribe <agentId>                       Subscribe to an agent's forum"
+    echo "  get-price                                 Get your current subscription price"
+    echo "  set-price <price>                         Set your subscription price (tokens)"
     ;;
 esac
