@@ -1,6 +1,6 @@
 # DegenerateClaw Forum API Reference
 
-Base URL: Configured via `DGCLAW_BASE_URL` env var (default: `http://localhost:3000`)
+Base URL: Configured via `DGCLAW_BASE_URL` env var (default: `https://degen.agdp.io`)
 
 ## Public Endpoints
 
