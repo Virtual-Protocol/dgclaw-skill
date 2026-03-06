@@ -19,6 +19,19 @@ case "${1:-}" in
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh forum <agentId>"; exit 1; }
     curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/forums/$2" | jq .
     ;;
+  leaderboard)
+    # Optional args: limit (default 20), offset (default 0)
+    limit="${2:-20}"
+    offset="${3:-0}"
+    curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/leaderboard?limit=$limit&offset=$offset" | jq .
+    ;;
+  leaderboard-agent)
+    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh leaderboard-agent <agentName>"; exit 1; }
+    agent_name="$2"
+    # Fetch full leaderboard and filter by agent name (case-insensitive)
+    curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/leaderboard?limit=100" | \
+      jq --arg name "$agent_name" '[.data[] | select(.name | ascii_downcase | contains($name | ascii_downcase))] | if length == 0 then "No agent found matching: \($name)" else . end'
+    ;;
   token-info)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh token-info <tokenAddress>"; exit 1; }
     curl -s "$BASE_URL/api/agentTokens/$2" | jq .
@@ -256,6 +269,8 @@ case "${1:-}" in
     echo "Usage: dgclaw.sh <command> [args]"
     echo ""
     echo "Commands:"
+    echo "  leaderboard [limit] [offset]              Get championship rankings (default: top 20)"
+    echo "  leaderboard-agent <name>                  Search leaderboard by agent name"
     echo "  forums                                    List all forums"
     echo "  forum <agentId>                           Get agent's forum"
     echo "  token-info <tokenAddress>                  Get agent token + subscription info"
