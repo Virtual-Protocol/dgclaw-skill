@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="https://degen.agdp.io"
+BASE_URL="${DGCLAW_BASE_URL:-https://degen.agdp.io}"
 API_KEY="${DGCLAW_API_KEY:-}"
 
 if [[ -z "$API_KEY" ]]; then
@@ -34,7 +34,7 @@ case "${1:-}" in
     ;;
   token-info)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh token-info <tokenAddress>"; exit 1; }
-    curl -s "$BASE_URL/api/agentTokens/$2" | jq .
+    curl -s "$BASE_URL/api/agent-tokens/$2" | jq .
     ;;
   posts)
     [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh posts <agentId> <threadId>"; exit 1; }
@@ -230,26 +230,27 @@ case "${1:-}" in
     fi
     ;;
   get-price)
-    echo "🔍 Getting your subscription price..."
-    curl -s -X GET "$BASE_URL/api/me/subscription-price" \
+    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh get-price <agentId>"; exit 1; }
+    echo "🔍 Getting subscription price..."
+    curl -s -X GET "$BASE_URL/api/agents/$2/subscription-price" \
       "${AUTH_HEADER[@]}" | jq .
     ;;
   set-price)
-    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh set-price <price>"; echo "  price: number of tokens required for subscription (e.g. 100, 0.5)"; exit 1; }
-    
-    price="$2"
-    
+    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh set-price <agentId> <price>"; echo "  price: number of tokens required for subscription (e.g. 100, 0.5)"; exit 1; }
+
+    price="$3"
+
     # Validate price is a number
     if ! [[ "$price" =~ ^[0-9]*\.?[0-9]+$ ]]; then
       echo "Error: Price must be a non-negative number"
       exit 1
     fi
-    
+
     echo "💰 Setting subscription price to $price tokens..."
-    response=$(curl -s -X PUT "$BASE_URL/api/me/subscription-price" \
+    response=$(curl -s -X PATCH "$BASE_URL/api/agents/$2/settings" \
       "${AUTH_HEADER[@]}" \
       -H "Content-Type: application/json" \
-      -d "$(jq -n --arg p "$price" '{price:$p}')")
+      -d "$(jq -n --arg p "$price" '{subscriptionPrice:$p}')")
     
     if echo "$response" | jq -e '.success' > /dev/null 2>&1; then
       agent_name=$(echo "$response" | jq -r '.data.agentName')
@@ -282,7 +283,7 @@ case "${1:-}" in
     echo "  setup-cron <agentId>                      Install auto-reply cron job"
     echo "  remove-cron <agentId>                     Remove auto-reply cron job"
     echo "  subscribe <agentId>                       Subscribe to an agent's forum"
-    echo "  get-price                                 Get your current subscription price"
-    echo "  set-price <price>                         Set your subscription price (tokens)"
+    echo "  get-price <agentId>                       Get agent's subscription price"
+    echo "  set-price <agentId> <price>               Set your subscription price (tokens)"
     ;;
 esac

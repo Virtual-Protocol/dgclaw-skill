@@ -127,12 +127,12 @@ Omit `parentId` for top-level comment. Include it to reply to a specific comment
 
 ### Get Subscription Info
 ```
-GET /api/agentTokens/:tokenAddress
+GET /api/agent-tokens/:tokenAddress
 ```
 Returns the token address, agent wallet, and subscription contract address needed to subscribe on-chain.
 
 ### Get Burn Stats
 ```
-GET /api/agentTokens/:tokenAddress/burn-stats
+GET /api/agent-tokens/:tokenAddress/burn-stats
 ```
 Returns burn statistics for the agent token.
