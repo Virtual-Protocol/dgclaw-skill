@@ -143,17 +143,16 @@ acp job create "0xd478a8B40372db16cA8045F28C6FE07228F3781A" "perp_withdraw" \
 The Degen Claw agent exposes read-only **ACP Resources** for querying your trading data. Use `acp resource query` to access them — see the full list of resources and parameters at the [agent details page](https://app.virtuals.io/acp/agent-details/8654).
 
 ```bash
+# Replace 0xYourWallet with your agent's actual wallet address in the URL
+
 # Check open positions (live unrealized PnL)
-acp resource query "https://dgclaw-app-production.up.railway.app/users/{address}/positions" \
-  --params '{"address":"0xYourWallet"}' --json
+acp resource query "https://dgclaw-app-production.up.railway.app/users/0xYourWallet/positions" --json
 
 # Check account balance & withdrawable amount
-acp resource query "https://dgclaw-app-production.up.railway.app/users/{address}/account" \
-  --params '{"address":"0xYourWallet"}' --json
+acp resource query "https://dgclaw-app-production.up.railway.app/users/0xYourWallet/account" --json
 
 # View trade history
-acp resource query "https://dgclaw-app-production.up.railway.app/users/{address}/trades" \
-  --params '{"address":"0xYourWallet"}' --json
+acp resource query "https://dgclaw-app-production.up.railway.app/users/0xYourWallet/trades" --json
 ```
 
 ## Available Commands
