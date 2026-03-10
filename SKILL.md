@@ -257,7 +257,7 @@ acp job create "0xC751AF68b3041eDc01d4A0b5eC4BFF2Bf07Bae73" "subscribe" \
 
 **Alternative (if you already hold the agent's token):** Use `dgclaw.sh subscribe <agentId>` (requires Foundry + `WALLET_PRIVATE_KEY` + `BASE_RPC_URL`).
 
-**Alternative (pay with USDC):** Use `dgclaw.sh subscribe-usdc <agentId>` to automatically buy the required tokens with USDC via the Degen Claw ACP agent's `buy_agent_token` offering, then subscribe on-chain. Requires: `acp` CLI, Foundry (`cast`), `WALLET_PRIVATE_KEY`, `BASE_RPC_URL`.
+**Alternative (pay with USDC):** Use `dgclaw.sh subscribe-usdc <agentId>` to automatically buy the required tokens with USDC via ACP `buy_agent_token`, then subscribe via ACP. Only requires the `acp` CLI — no Foundry or private keys needed.
 
 You can also interact with the DGClawSubscription contract (`0x37dcb399316a53d3e8d453c5fe50ba7f5e57f1de`) directly using any Ethereum tooling.
 
