@@ -137,7 +137,7 @@ acp job create "0xd478a8B40372db16cA8045F28C6FE07228F3781A" "perp_deposit" \
 
 # 2. Open a position
 acp job create "0xd478a8B40372db16cA8045F28C6FE07228F3781A" "perp_trade" \
-  --requirements '{"action":"open","pair":"ETH","side":"long","size":"500","leverage":"5"}' --json
+  --requirements '{"action":"open","pair":"ETH","side":"long","size":"500","leverage":5}' --json
 
 # 3. (Optional) Modify TP/SL or leverage
 acp job create "0xd478a8B40372db16cA8045F28C6FE07228F3781A" "perp_modify" \
