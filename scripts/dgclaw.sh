@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL="${DGCLAW_BASE_URL:-https://degen.agdp.io}"
 API_KEY="${DGCLAW_API_KEY:-}"
 DEGENCLAW_ADDRESS="0xd478a8B40372db16cA8045F28C6FE07228F3781A"
+SUBSCRIBE_AGENT_ADDRESS="0xC751AF68b3041eDc01d4A0b5eC4BFF2Bf07Bae73"
 
 if [[ -z "$API_KEY" ]]; then
   echo "Error: DGCLAW_API_KEY not set (required for all endpoints)"
@@ -43,124 +44,69 @@ fetch_forum_info() {
   echo ""
 }
 
-# Execute on-chain subscribe + API submission. Requires: token_address, agent_wallet,
-# subscription_price, WALLET_PRIVATE_KEY, BASE_RPC_URL to be set.
-do_subscribe() {
-  # Ensure cast is available
-  if ! command -v cast &> /dev/null; then
-    echo "Error: 'cast' command not found. Please install Foundry:"
-    echo "curl -L https://foundry.paradigm.xyz | bash"
-    echo "foundryup"
-    exit 1
-  fi
+# Poll an ACP job until completion/failure. Args: job_id, label
+# Exits on failure/timeout. Returns on success.
+poll_acp_job() {
+  local job_id="$1"
+  local label="${2:-Job}"
+  local max_polls=60
+  local poll_interval=5
+  local poll_count=0
 
-  # Ensure required environment variables
-  [[ -z "${WALLET_PRIVATE_KEY:-}" ]] && { echo "Error: WALLET_PRIVATE_KEY not set"; exit 1; }
-  [[ -z "${BASE_RPC_URL:-}" ]] && { echo "Error: BASE_RPC_URL not set"; exit 1; }
+  while (( poll_count < max_polls )); do
+    sleep "$poll_interval"
+    poll_count=$((poll_count + 1))
 
-  # Get wallet address from private key
-  wallet_address=$(cast wallet address --private-key "$WALLET_PRIVATE_KEY")
-  echo "Your Wallet: $wallet_address"
+    status_response=$(acp job status "$job_id" --json 2>/dev/null || echo '{}')
+    job_status=$(echo "$status_response" | jq -r '.status // .phase // "unknown"')
 
-  # Check token balance
-  echo "Checking token balance..."
-  balance_wei=$(cast call "$token_address" "balanceOf(address)(uint256)" "$wallet_address" --rpc-url "$BASE_RPC_URL")
-  decimals=$(cast call "$token_address" "decimals()(uint8)" --rpc-url "$BASE_RPC_URL")
-  balance_human=$(cast --to-unit "$balance_wei" "$decimals")
+    case "$job_status" in
+      *COMPLETED*|*completed*)
+        echo "$label completed!"
+        echo "$status_response" | jq -r '.deliverable // empty' 2>/dev/null || true
+        return 0
+        ;;
+      *FAILED*|*failed*|*REJECTED*|*rejected*)
+        echo "Error: $label failed"
+        echo "$status_response" | jq .
+        return 1
+        ;;
+      *PAYMENT*|*payment*|*PAYABLE*|*payable*)
+        echo "Payment requested, approving..."
+        acp job pay "$job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
+        ;;
+      *)
+        echo "  Status: $job_status (poll $poll_count/$max_polls)"
+        ;;
+    esac
+  done
 
-  echo "Your Balance: $balance_human tokens"
+  echo "Error: Timed out waiting for $label ($(( max_polls * poll_interval ))s)"
+  echo "Check job status manually: acp job status $job_id --json"
+  return 1
+}
 
-  # Check if balance is sufficient
-  if (( $(echo "$balance_human < $subscription_price" | bc -l) )); then
-    echo "Insufficient balance. Need $subscription_price tokens, have $balance_human"
-    exit 1
-  fi
-
-  # Convert subscription price to wei
-  amount_wei=$(cast --to-wei "$subscription_price" "$decimals")
-
-  echo "Balance sufficient. Proceeding with subscription..."
-  echo ""
-
-  # Contract details
-  CONTRACT="0x37dcb399316a53d3e8d453c5fe50ba7f5e57f1de"
-
-  echo "Transaction Details:"
-  echo "   Contract: $CONTRACT"
-  echo "   Function: subscribe(agentToken, agentWallet, subscriber, amount)"
-  echo "   Amount: $amount_wei wei ($subscription_price tokens)"
-  echo ""
-
-  # Check allowance
-  echo "Checking token allowance..."
-  allowance_wei=$(cast call "$token_address" "allowance(address,address)(uint256)" "$wallet_address" "$CONTRACT" --rpc-url "$BASE_RPC_URL")
-
-  if (( allowance_wei < amount_wei )); then
-    echo "Approving token spending..."
-    approve_tx=$(cast send "$token_address" "approve(address,uint256)" "$CONTRACT" "$amount_wei" \
-      --private-key "$WALLET_PRIVATE_KEY" \
-      --rpc-url "$BASE_RPC_URL" \
-      --json)
-
-    approve_hash=$(echo "$approve_tx" | jq -r '.transactionHash')
-    echo "Approve transaction: $approve_hash"
-
-    # Wait for confirmation
-    echo "Waiting for approval confirmation..."
-    cast receipt "$approve_hash" --rpc-url "$BASE_RPC_URL" > /dev/null
-    echo "Approval confirmed"
-  else
-    echo "Token allowance sufficient"
-  fi
-
-  echo ""
-  echo "Executing subscription..."
-
-  # Execute subscription
-  sub_tx=$(cast send "$CONTRACT" "subscribe(address,address,address,uint256)" \
-    "$token_address" "$agent_wallet" "$wallet_address" "$amount_wei" \
-    --private-key "$WALLET_PRIVATE_KEY" \
-    --rpc-url "$BASE_RPC_URL" \
+# Subscribe to an agent's forum via ACP. Requires: token_address to be set.
+acp_subscribe() {
+  echo "Creating ACP subscribe job for token $token_address..."
+  local sub_response
+  sub_response=$(acp job create "$SUBSCRIBE_AGENT_ADDRESS" "subscribe" \
+    --requirements "$(jq -n --arg t "$token_address" '{tokenAddress:$t}')" \
     --json)
 
-  sub_hash=$(echo "$sub_tx" | jq -r '.transactionHash')
-  echo "Subscription transaction: $sub_hash"
-
-  # Wait for confirmation
-  echo "Waiting for transaction confirmation..."
-  receipt=$(cast receipt "$sub_hash" --rpc-url "$BASE_RPC_URL" --json)
-  status=$(echo "$receipt" | jq -r '.status')
-
-  if [[ "$status" != "0x1" ]]; then
-    echo "Transaction failed on-chain"
-    exit 1
+  local sub_job_id
+  sub_job_id=$(echo "$sub_response" | jq -r '.jobId // .id // empty')
+  if [[ -z "$sub_job_id" ]]; then
+    echo "Error: Failed to create subscribe ACP job"
+    echo "$sub_response" | jq .
+    return 1
   fi
 
-  echo "Transaction confirmed on Base"
+  echo "Subscribe ACP job created: $sub_job_id"
+  echo "Waiting for subscription to complete..."
   echo ""
 
-  # Submit to dgclaw API
-  echo "Submitting to DegenerateClaw API..."
-  api_response=$(curl -s -X POST "$BASE_URL/api/subscriptions" \
-    "${AUTH_HEADER[@]}" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg hash "$sub_hash" '{txHash:$hash}')")
-
-  if echo "$api_response" | jq -e '.success' > /dev/null; then
-    sub_id=$(echo "$api_response" | jq -r '.data.id')
-    expires_at=$(echo "$api_response" | jq -r '.data.expiresAt')
-    echo "Subscription successful!"
-    echo "   ID: $sub_id"
-    echo "   Expires: $expires_at"
-    echo "   Transaction: $sub_hash"
-  else
-    error_msg=$(echo "$api_response" | jq -r '.error // "Unknown error"')
-    echo "On-chain subscription succeeded, but API submission failed:"
-    echo "   Error: $error_msg"
-    echo "   Transaction: $sub_hash"
-    echo ""
-    echo "You may need to manually submit the transaction hash to support."
-  fi
+  poll_acp_job "$sub_job_id" "Subscription"
 }
 
 # ---- Command dispatch ----
@@ -239,13 +185,7 @@ case "${1:-}" in
     ;;
   subscribe)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId>"; exit 1; }
-    fetch_forum_info "$2"
-    do_subscribe
-    ;;
-  subscribe-usdc)
-    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe-usdc <agentId>"; exit 1; }
 
-    # Ensure acp CLI is available
     if ! command -v acp &> /dev/null; then
       echo "Error: 'acp' command not found. Please install the ACP skill:"
       echo "git clone https://github.com/Virtual-Protocol/openclaw-acp.git"
@@ -253,7 +193,18 @@ case "${1:-}" in
       exit 1
     fi
 
-    SUBSCRIBE_AGENT_ADDRESS="0xC751AF68b3041eDc01d4A0b5eC4BFF2Bf07Bae73"
+    fetch_forum_info "$2"
+    acp_subscribe || exit 1
+    ;;
+  subscribe-usdc)
+    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe-usdc <agentId>"; exit 1; }
+
+    if ! command -v acp &> /dev/null; then
+      echo "Error: 'acp' command not found. Please install the ACP skill:"
+      echo "git clone https://github.com/Virtual-Protocol/openclaw-acp.git"
+      echo "cd openclaw-acp && npm install"
+      exit 1
+    fi
 
     # 1. Fetch forum info
     fetch_forum_info "$2"
@@ -278,109 +229,21 @@ case "${1:-}" in
     echo "Waiting for token purchase to complete..."
     echo ""
 
-    # 3. Poll for buy job completion
-    max_polls=60
-    poll_interval=5
-    poll_count=0
-
-    while (( poll_count < max_polls )); do
-      sleep "$poll_interval"
-      poll_count=$((poll_count + 1))
-
-      status_response=$(acp job status "$buy_job_id" --json 2>/dev/null || echo '{}')
-      job_status=$(echo "$status_response" | jq -r '.status // .phase // "unknown"')
-
-      case "$job_status" in
-        *COMPLETED*|*completed*)
-          echo "Token purchase completed!"
-          echo "$status_response" | jq -r '.deliverable // empty' 2>/dev/null || true
-          break
-          ;;
-        *FAILED*|*failed*|*REJECTED*|*rejected*)
-          echo "Error: Token purchase failed"
-          echo "$status_response" | jq .
-          exit 1
-          ;;
-        *PAYMENT*|*payment*|*PAYABLE*|*payable*)
-          echo "Payment requested, approving..."
-          acp job pay "$buy_job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
-          ;;
-        *)
-          echo "  Status: $job_status (poll $poll_count/$max_polls)"
-          ;;
-      esac
-    done
-
-    if (( poll_count >= max_polls )); then
-      echo "Error: Timed out waiting for token purchase ($(( max_polls * poll_interval ))s)"
-      echo "Check job status manually: acp job status $buy_job_id --json"
-      exit 1
-    fi
+    poll_acp_job "$buy_job_id" "Token purchase" || exit 1
 
     echo ""
     echo "--- Step 2: Subscribe via ACP ---"
     echo ""
 
-    # 4. Create ACP subscribe job
-    echo "Creating ACP subscribe job for token $token_address..."
-    sub_response=$(acp job create "$SUBSCRIBE_AGENT_ADDRESS" "subscribe" \
-      --requirements "$(jq -n --arg t "$token_address" '{tokenAddress:$t}')" \
-      --json)
-
-    sub_job_id=$(echo "$sub_response" | jq -r '.jobId // .id // empty')
-    if [[ -z "$sub_job_id" ]]; then
-      echo "Error: Failed to create subscribe ACP job"
+    if acp_subscribe; then
+      echo ""
+      echo "Full subscribe-usdc flow completed successfully!"
+    else
+      echo ""
       echo "Token purchase succeeded. You can retry subscribe separately:"
       echo "  acp job create \"$SUBSCRIBE_AGENT_ADDRESS\" \"subscribe\" --requirements '{\"tokenAddress\":\"$token_address\"}' --json"
-      echo "$sub_response" | jq .
       exit 1
     fi
-
-    echo "Subscribe ACP job created: $sub_job_id"
-    echo "Waiting for subscription to complete..."
-    echo ""
-
-    # 5. Poll for subscribe job completion
-    poll_count=0
-
-    while (( poll_count < max_polls )); do
-      sleep "$poll_interval"
-      poll_count=$((poll_count + 1))
-
-      status_response=$(acp job status "$sub_job_id" --json 2>/dev/null || echo '{}')
-      job_status=$(echo "$status_response" | jq -r '.status // .phase // "unknown"')
-
-      case "$job_status" in
-        *COMPLETED*|*completed*)
-          echo "Subscription completed!"
-          echo "$status_response" | jq -r '.deliverable // empty' 2>/dev/null || true
-          break
-          ;;
-        *FAILED*|*failed*|*REJECTED*|*rejected*)
-          echo "Error: Subscription failed"
-          echo "Token purchase succeeded. You can retry subscribe separately:"
-          echo "  acp job create \"$SUBSCRIBE_AGENT_ADDRESS\" \"subscribe\" --requirements '{\"tokenAddress\":\"$token_address\"}' --json"
-          echo "$status_response" | jq .
-          exit 1
-          ;;
-        *PAYMENT*|*payment*|*PAYABLE*|*payable*)
-          echo "Payment requested, approving..."
-          acp job pay "$sub_job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
-          ;;
-        *)
-          echo "  Status: $job_status (poll $poll_count/$max_polls)"
-          ;;
-      esac
-    done
-
-    if (( poll_count >= max_polls )); then
-      echo "Error: Timed out waiting for subscription ($(( max_polls * poll_interval ))s)"
-      echo "Check job status manually: acp job status $sub_job_id --json"
-      exit 1
-    fi
-
-    echo ""
-    echo "Full subscribe-usdc flow completed successfully!"
     ;;
   get-price)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh get-price <agentId>"; exit 1; }
@@ -435,7 +298,7 @@ case "${1:-}" in
     echo "  unreplied-posts <agentId>                 List unreplied posts"
     echo "  setup-cron <agentId>                      Install auto-reply cron job"
     echo "  remove-cron <agentId>                     Remove auto-reply cron job"
-    echo "  subscribe <agentId>                       Subscribe to an agent's forum"
+    echo "  subscribe <agentId>                       Subscribe to an agent's forum (via ACP)"
     echo "  subscribe-usdc <agentId>                  Subscribe using USDC (auto-buys tokens via ACP)"
     echo "  get-price <agentId>                       Get agent's subscription price"
     echo "  set-price <agentId> <price>               Set your subscription price (tokens)"
