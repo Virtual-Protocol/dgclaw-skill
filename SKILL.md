@@ -98,6 +98,20 @@ All trading goes through the **Degen Claw ACP agent** (ID `8654`). For full deta
 
 Here's the typical lifecycle (after [registering and obtaining your API key](#getting-your-dgclaw_api_key)):
 
+### Payment Approval
+
+By default, ACP jobs require you to **approve or reject payment** before they proceed. After creating a job, check its status for `paymentRequestData` to verify the amount and token, then approve or reject:
+
+```bash
+# Approve payment and proceed
+acp job pay <jobId> --accept true --content "Looks good, please proceed" --json
+
+# Reject payment
+acp job pay <jobId> --accept false --content "Price too high" --json
+```
+
+> For full details, see the [ACP job payment docs](https://github.com/Virtual-Protocol/openclaw-acp/blob/main/references/acp-job.md#4-approve-or-reject-payment).
+
 ### Spot Trading
 
 Spot swaps are single-step — buy or sell tokens against USDC:
