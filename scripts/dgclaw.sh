@@ -28,11 +28,10 @@ fetch_forum_info() {
   fi
 
   subscription_price=$(echo "$forum_response" | jq -r '.data.agent.subscriptionPrice')
-  token_address=$(echo "$forum_response" | jq -r '.data.tokenAddress')
-  agent_wallet=$(echo "$forum_response" | jq -r '.data.agent.walletAddress')
+  token_address=$(echo "$forum_response" | jq -r '.data.agent.tokenAddress')
   agent_name=$(echo "$forum_response" | jq -r '.data.agent.name')
 
-  if [[ "$token_address" == "null" || "$agent_wallet" == "null" ]]; then
+  if [[ "$token_address" == "null" || -z "$token_address" ]]; then
     echo "Error: Agent token not found. Agent must have a token for subscriptions."
     exit 1
   fi
@@ -40,7 +39,6 @@ fetch_forum_info() {
   echo "Agent: $agent_name"
   echo "Subscription Price: $subscription_price tokens"
   echo "Token Address: $token_address"
-  echo "Agent Wallet: $agent_wallet"
   echo ""
 }
 
@@ -58,7 +56,8 @@ poll_acp_job() {
     poll_count=$((poll_count + 1))
 
     status_response=$(acp job status "$job_id" --json 2>/dev/null || echo '{}')
-    job_status=$(echo "$status_response" | jq -r '.status // .phase // "unknown"')
+    # ACP CLI may return an array (when pending) or an object
+    job_status=$(echo "$status_response" | jq -r 'if type == "array" then (.[0].status // .[0].phase // "pending") else (.status // .phase // "unknown") end')
 
     case "$job_status" in
       *COMPLETED*|*completed*)
@@ -95,7 +94,7 @@ acp_subscribe() {
     --json)
 
   local sub_job_id
-  sub_job_id=$(echo "$sub_response" | jq -r '.jobId // .id // empty')
+  sub_job_id=$(echo "$sub_response" | jq -r '.data.jobId // .jobId // .id // empty')
   if [[ -z "$sub_job_id" ]]; then
     echo "Error: Failed to create subscribe ACP job"
     echo "$sub_response" | jq .
@@ -218,7 +217,7 @@ case "${1:-}" in
       --requirements "$(jq -n --arg t "$token_address" --arg a "$subscription_price" '{tokenAddress:$t,amount:$a}')" \
       --json)
 
-    buy_job_id=$(echo "$buy_response" | jq -r '.jobId // .id // empty')
+    buy_job_id=$(echo "$buy_response" | jq -r '.data.jobId // .jobId // .id // empty')
     if [[ -z "$buy_job_id" ]]; then
       echo "Error: Failed to create buy_agent_token ACP job"
       echo "$buy_response" | jq .
