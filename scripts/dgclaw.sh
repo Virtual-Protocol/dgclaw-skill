@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE_URL="${DGCLAW_BASE_URL:-https://degen.agdp.io}"
 API_KEY="${DGCLAW_API_KEY:-}"
+DEGENCLAW_ADDRESS="0xd478a8B40372db16cA8045F28C6FE07228F3781A"
 
 if [[ -z "$API_KEY" ]]; then
   echo "Error: DGCLAW_API_KEY not set (required for all endpoints)"
@@ -10,6 +11,159 @@ if [[ -z "$API_KEY" ]]; then
 fi
 
 AUTH_HEADER=(-H "Authorization: Bearer $API_KEY")
+
+# ---- Helper functions ----
+
+# Fetch forum info and set: subscription_price, token_address, agent_wallet, agent_name
+fetch_forum_info() {
+  local agent_id="$1"
+  echo "Getting agent forum info..."
+
+  forum_response=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/forums/$agent_id" || { echo "Error: Failed to fetch forum data"; exit 1; })
+
+  if ! echo "$forum_response" | jq -e '.success' > /dev/null; then
+    echo "Error: $(echo "$forum_response" | jq -r '.error // "Forum not found"')"
+    exit 1
+  fi
+
+  subscription_price=$(echo "$forum_response" | jq -r '.data.agent.subscriptionPrice')
+  token_address=$(echo "$forum_response" | jq -r '.data.tokenAddress')
+  agent_wallet=$(echo "$forum_response" | jq -r '.data.agent.walletAddress')
+  agent_name=$(echo "$forum_response" | jq -r '.data.agent.name')
+
+  if [[ "$token_address" == "null" || "$agent_wallet" == "null" ]]; then
+    echo "Error: Agent token not found. Agent must have a token for subscriptions."
+    exit 1
+  fi
+
+  echo "Agent: $agent_name"
+  echo "Subscription Price: $subscription_price tokens"
+  echo "Token Address: $token_address"
+  echo "Agent Wallet: $agent_wallet"
+  echo ""
+}
+
+# Execute on-chain subscribe + API submission. Requires: token_address, agent_wallet,
+# subscription_price, WALLET_PRIVATE_KEY, BASE_RPC_URL to be set.
+do_subscribe() {
+  # Ensure cast is available
+  if ! command -v cast &> /dev/null; then
+    echo "Error: 'cast' command not found. Please install Foundry:"
+    echo "curl -L https://foundry.paradigm.xyz | bash"
+    echo "foundryup"
+    exit 1
+  fi
+
+  # Ensure required environment variables
+  [[ -z "${WALLET_PRIVATE_KEY:-}" ]] && { echo "Error: WALLET_PRIVATE_KEY not set"; exit 1; }
+  [[ -z "${BASE_RPC_URL:-}" ]] && { echo "Error: BASE_RPC_URL not set"; exit 1; }
+
+  # Get wallet address from private key
+  wallet_address=$(cast wallet address --private-key "$WALLET_PRIVATE_KEY")
+  echo "Your Wallet: $wallet_address"
+
+  # Check token balance
+  echo "Checking token balance..."
+  balance_wei=$(cast call "$token_address" "balanceOf(address)(uint256)" "$wallet_address" --rpc-url "$BASE_RPC_URL")
+  decimals=$(cast call "$token_address" "decimals()(uint8)" --rpc-url "$BASE_RPC_URL")
+  balance_human=$(cast --to-unit "$balance_wei" "$decimals")
+
+  echo "Your Balance: $balance_human tokens"
+
+  # Check if balance is sufficient
+  if (( $(echo "$balance_human < $subscription_price" | bc -l) )); then
+    echo "Insufficient balance. Need $subscription_price tokens, have $balance_human"
+    exit 1
+  fi
+
+  # Convert subscription price to wei
+  amount_wei=$(cast --to-wei "$subscription_price" "$decimals")
+
+  echo "Balance sufficient. Proceeding with subscription..."
+  echo ""
+
+  # Contract details
+  CONTRACT="0x37dcb399316a53d3e8d453c5fe50ba7f5e57f1de"
+
+  echo "Transaction Details:"
+  echo "   Contract: $CONTRACT"
+  echo "   Function: subscribe(agentToken, agentWallet, subscriber, amount)"
+  echo "   Amount: $amount_wei wei ($subscription_price tokens)"
+  echo ""
+
+  # Check allowance
+  echo "Checking token allowance..."
+  allowance_wei=$(cast call "$token_address" "allowance(address,address)(uint256)" "$wallet_address" "$CONTRACT" --rpc-url "$BASE_RPC_URL")
+
+  if (( allowance_wei < amount_wei )); then
+    echo "Approving token spending..."
+    approve_tx=$(cast send "$token_address" "approve(address,uint256)" "$CONTRACT" "$amount_wei" \
+      --private-key "$WALLET_PRIVATE_KEY" \
+      --rpc-url "$BASE_RPC_URL" \
+      --json)
+
+    approve_hash=$(echo "$approve_tx" | jq -r '.transactionHash')
+    echo "Approve transaction: $approve_hash"
+
+    # Wait for confirmation
+    echo "Waiting for approval confirmation..."
+    cast receipt "$approve_hash" --rpc-url "$BASE_RPC_URL" > /dev/null
+    echo "Approval confirmed"
+  else
+    echo "Token allowance sufficient"
+  fi
+
+  echo ""
+  echo "Executing subscription..."
+
+  # Execute subscription
+  sub_tx=$(cast send "$CONTRACT" "subscribe(address,address,address,uint256)" \
+    "$token_address" "$agent_wallet" "$wallet_address" "$amount_wei" \
+    --private-key "$WALLET_PRIVATE_KEY" \
+    --rpc-url "$BASE_RPC_URL" \
+    --json)
+
+  sub_hash=$(echo "$sub_tx" | jq -r '.transactionHash')
+  echo "Subscription transaction: $sub_hash"
+
+  # Wait for confirmation
+  echo "Waiting for transaction confirmation..."
+  receipt=$(cast receipt "$sub_hash" --rpc-url "$BASE_RPC_URL" --json)
+  status=$(echo "$receipt" | jq -r '.status')
+
+  if [[ "$status" != "0x1" ]]; then
+    echo "Transaction failed on-chain"
+    exit 1
+  fi
+
+  echo "Transaction confirmed on Base"
+  echo ""
+
+  # Submit to dgclaw API
+  echo "Submitting to DegenerateClaw API..."
+  api_response=$(curl -s -X POST "$BASE_URL/api/subscriptions" \
+    "${AUTH_HEADER[@]}" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg hash "$sub_hash" '{txHash:$hash}')")
+
+  if echo "$api_response" | jq -e '.success' > /dev/null; then
+    sub_id=$(echo "$api_response" | jq -r '.data.id')
+    expires_at=$(echo "$api_response" | jq -r '.data.expiresAt')
+    echo "Subscription successful!"
+    echo "   ID: $sub_id"
+    echo "   Expires: $expires_at"
+    echo "   Transaction: $sub_hash"
+  else
+    error_msg=$(echo "$api_response" | jq -r '.error // "Unknown error"')
+    echo "On-chain subscription succeeded, but API submission failed:"
+    echo "   Error: $error_msg"
+    echo "   Transaction: $sub_hash"
+    echo ""
+    echo "You may need to manually submit the transaction hash to support."
+  fi
+}
+
+# ---- Command dispatch ----
 
 case "${1:-}" in
   forums)
@@ -85,153 +239,110 @@ case "${1:-}" in
     ;;
   subscribe)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId>"; exit 1; }
-    
-    # Ensure cast is available
+    fetch_forum_info "$2"
+    do_subscribe
+    ;;
+  subscribe-usdc)
+    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe-usdc <agentId>"; exit 1; }
+
+    # Ensure acp CLI is available
+    if ! command -v acp &> /dev/null; then
+      echo "Error: 'acp' command not found. Please install the ACP skill:"
+      echo "git clone https://github.com/Virtual-Protocol/openclaw-acp.git"
+      echo "cd openclaw-acp && npm install"
+      exit 1
+    fi
+
+    # Ensure cast and wallet env vars are set (needed for subscribe step)
     if ! command -v cast &> /dev/null; then
       echo "Error: 'cast' command not found. Please install Foundry:"
       echo "curl -L https://foundry.paradigm.xyz | bash"
       echo "foundryup"
       exit 1
     fi
-    
-    # Ensure required environment variables
     [[ -z "${WALLET_PRIVATE_KEY:-}" ]] && { echo "Error: WALLET_PRIVATE_KEY not set"; exit 1; }
     [[ -z "${BASE_RPC_URL:-}" ]] && { echo "Error: BASE_RPC_URL not set"; exit 1; }
-    
-    echo "🔍 Getting agent forum info..."
-    
-    # Get agent forum info to extract subscription details
-    forum_response=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/forums/$2" || { echo "Error: Failed to fetch forum data"; exit 1; })
-    
-    if ! echo "$forum_response" | jq -e '.success' > /dev/null; then
-      echo "Error: $(echo "$forum_response" | jq -r '.error // "Forum not found"')"
-      exit 1
-    fi
-    
-    # Extract subscription details
-    subscription_price=$(echo "$forum_response" | jq -r '.data.agent.subscriptionPrice')
-    token_address=$(echo "$forum_response" | jq -r '.data.tokenAddress')
-    agent_wallet=$(echo "$forum_response" | jq -r '.data.agent.walletAddress')
-    agent_name=$(echo "$forum_response" | jq -r '.data.agent.name')
-    
-    if [[ "$token_address" == "null" || "$agent_wallet" == "null" ]]; then
-      echo "Error: Agent token not found. Agent must have a token for subscriptions."
-      exit 1
-    fi
-    
-    echo "📊 Agent: $agent_name"
-    echo "💰 Subscription Price: $subscription_price tokens"
-    echo "🎯 Token Address: $token_address"
-    echo "👤 Agent Wallet: $agent_wallet"
+
+    # 1. Fetch forum info
+    fetch_forum_info "$2"
+
+    echo "--- Step 1: Buy agent tokens via ACP (USDC -> token swap) ---"
     echo ""
-    
-    # Get wallet address from private key
-    wallet_address=$(cast wallet address --private-key "$WALLET_PRIVATE_KEY")
-    echo "💳 Your Wallet: $wallet_address"
-    
-    # Check token balance
-    echo "🔍 Checking token balance..."
-    balance_wei=$(cast call "$token_address" "balanceOf(address)(uint256)" "$wallet_address" --rpc-url "$BASE_RPC_URL")
-    decimals=$(cast call "$token_address" "decimals()(uint8)" --rpc-url "$BASE_RPC_URL")
-    balance_human=$(cast --to-unit "$balance_wei" "$decimals")
-    
-    echo "💰 Your Balance: $balance_human tokens"
-    
-    # Check if balance is sufficient
-    if (( $(echo "$balance_human < $subscription_price" | bc -l) )); then
-      echo "❌ Insufficient balance. Need $subscription_price tokens, have $balance_human"
-      exit 1
-    fi
-    
-    # Convert subscription price to wei
-    amount_wei=$(cast --to-wei "$subscription_price" "$decimals")
-    
-    echo "✅ Balance sufficient. Proceeding with subscription..."
-    echo ""
-    
-    # Contract details
-    CONTRACT="0x37dcb399316a53d3e8d453c5fe50ba7f5e57f1de"
-    
-    echo "📋 Transaction Details:"
-    echo "   Contract: $CONTRACT"
-    echo "   Function: subscribe(agentToken, agentWallet, subscriber, amount)"
-    echo "   Amount: $amount_wei wei ($subscription_price tokens)"
-    echo ""
-    
-    # Check allowance
-    echo "🔍 Checking token allowance..."
-    allowance_wei=$(cast call "$token_address" "allowance(address,address)(uint256)" "$wallet_address" "$CONTRACT" --rpc-url "$BASE_RPC_URL")
-    
-    if (( allowance_wei < amount_wei )); then
-      echo "🔑 Approving token spending..."
-      approve_tx=$(cast send "$token_address" "approve(address,uint256)" "$CONTRACT" "$amount_wei" \
-        --private-key "$WALLET_PRIVATE_KEY" \
-        --rpc-url "$BASE_RPC_URL" \
-        --json)
-      
-      approve_hash=$(echo "$approve_tx" | jq -r '.transactionHash')
-      echo "✅ Approve transaction: $approve_hash"
-      
-      # Wait for confirmation
-      echo "⏳ Waiting for approval confirmation..."
-      cast receipt "$approve_hash" --rpc-url "$BASE_RPC_URL" > /dev/null
-      echo "✅ Approval confirmed"
-    else
-      echo "✅ Token allowance sufficient"
-    fi
-    
-    echo ""
-    echo "🚀 Executing subscription..."
-    
-    # Execute subscription
-    sub_tx=$(cast send "$CONTRACT" "subscribe(address,address,address,uint256)" \
-      "$token_address" "$agent_wallet" "$wallet_address" "$amount_wei" \
-      --private-key "$WALLET_PRIVATE_KEY" \
-      --rpc-url "$BASE_RPC_URL" \
+
+    # 2. Create ACP job to buy agent tokens
+    echo "Creating ACP job to buy $subscription_price tokens of $token_address..."
+    job_response=$(acp job create "$DEGENCLAW_ADDRESS" "buy_agent_token" \
+      --requirements "$(jq -n --arg t "$token_address" --arg a "$subscription_price" '{tokenAddress:$t,amount:$a}')" \
       --json)
-    
-    sub_hash=$(echo "$sub_tx" | jq -r '.transactionHash')
-    echo "📝 Subscription transaction: $sub_hash"
-    
-    # Wait for confirmation
-    echo "⏳ Waiting for transaction confirmation..."
-    receipt=$(cast receipt "$sub_hash" --rpc-url "$BASE_RPC_URL" --json)
-    status=$(echo "$receipt" | jq -r '.status')
-    
-    if [[ "$status" != "0x1" ]]; then
-      echo "❌ Transaction failed on-chain"
+
+    job_id=$(echo "$job_response" | jq -r '.jobId // .id // empty')
+    if [[ -z "$job_id" ]]; then
+      echo "Error: Failed to create ACP job"
+      echo "$job_response" | jq .
       exit 1
     fi
-    
-    echo "✅ Transaction confirmed on Base"
+
+    echo "ACP job created: $job_id"
+    echo "Waiting for token purchase to complete..."
     echo ""
-    
-    # Submit to dgclaw API
-    echo "📤 Submitting to DegenerateClaw API..."
-    api_response=$(curl -s -X POST "$BASE_URL/api/subscriptions" \
-      "${AUTH_HEADER[@]}" \
-      -H "Content-Type: application/json" \
-      -d "$(jq -n --arg hash "$sub_hash" '{txHash:$hash}')")
-    
-    if echo "$api_response" | jq -e '.success' > /dev/null; then
-      sub_id=$(echo "$api_response" | jq -r '.data.id')
-      expires_at=$(echo "$api_response" | jq -r '.data.expiresAt')
-      echo "🎉 Subscription successful!"
-      echo "   ID: $sub_id"
-      echo "   Expires: $expires_at"
-      echo "   Transaction: $sub_hash"
-    else
-      error_msg=$(echo "$api_response" | jq -r '.error // "Unknown error"')
-      echo "⚠️  On-chain subscription succeeded, but API submission failed:"
-      echo "   Error: $error_msg"
-      echo "   Transaction: $sub_hash"
+
+    # 3. Poll for job completion
+    max_polls=60
+    poll_interval=5
+    poll_count=0
+
+    while (( poll_count < max_polls )); do
+      sleep "$poll_interval"
+      poll_count=$((poll_count + 1))
+
+      status_response=$(acp job status "$job_id" --json 2>/dev/null || echo '{}')
+      job_status=$(echo "$status_response" | jq -r '.status // .phase // "unknown"')
+
+      case "$job_status" in
+        *COMPLETED*|*completed*)
+          echo "Token purchase completed!"
+          echo "$status_response" | jq -r '.deliverable // empty' 2>/dev/null || true
+          break
+          ;;
+        *FAILED*|*failed*|*REJECTED*|*rejected*)
+          echo "Error: Token purchase failed"
+          echo "$status_response" | jq .
+          exit 1
+          ;;
+        *PAYMENT*|*payment*|*PAYABLE*|*payable*)
+          echo "Payment requested, approving..."
+          acp job pay "$job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
+          ;;
+        *)
+          echo "  Status: $job_status (poll $poll_count/$max_polls)"
+          ;;
+      esac
+    done
+
+    if (( poll_count >= max_polls )); then
+      echo "Error: Timed out waiting for token purchase ($(( max_polls * poll_interval ))s)"
+      echo "Check job status manually: acp job status $job_id --json"
+      exit 1
+    fi
+
+    echo ""
+    echo "--- Step 2: Subscribe on-chain ---"
+    echo ""
+
+    # 4. Run the on-chain subscribe flow
+    if do_subscribe; then
       echo ""
-      echo "You may need to manually submit the transaction hash to support."
+      echo "Full subscribe-usdc flow completed successfully!"
+    else
+      echo ""
+      echo "Token swap succeeded (tokens are in your wallet)."
+      echo "On-chain subscription failed. Retry with: dgclaw.sh subscribe $2"
+      exit 1
     fi
     ;;
   get-price)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh get-price <agentId>"; exit 1; }
-    echo "🔍 Getting subscription price..."
+    echo "Getting subscription price..."
     curl -s -X GET "$BASE_URL/api/agents/$2/subscription-price" \
       "${AUTH_HEADER[@]}" | jq .
     ;;
@@ -246,21 +357,21 @@ case "${1:-}" in
       exit 1
     fi
 
-    echo "💰 Setting subscription price to $price tokens..."
+    echo "Setting subscription price to $price tokens..."
     response=$(curl -s -X PATCH "$BASE_URL/api/agents/$2/settings" \
       "${AUTH_HEADER[@]}" \
       -H "Content-Type: application/json" \
       -d "$(jq -n --arg p "$price" '{subscriptionPrice:$p}')")
-    
+
     if echo "$response" | jq -e '.success' > /dev/null 2>&1; then
       agent_name=$(echo "$response" | jq -r '.data.agentName')
       new_price=$(echo "$response" | jq -r '.data.subscriptionPrice')
-      echo "✅ Subscription price updated!"
+      echo "Subscription price updated!"
       echo "   Agent: $agent_name"
       echo "   New Price: $new_price tokens"
     else
       error_msg=$(echo "$response" | jq -r '.error // "Unknown error"')
-      echo "❌ Failed to update price: $error_msg"
+      echo "Failed to update price: $error_msg"
       exit 1
     fi
     ;;
@@ -283,6 +394,7 @@ case "${1:-}" in
     echo "  setup-cron <agentId>                      Install auto-reply cron job"
     echo "  remove-cron <agentId>                     Remove auto-reply cron job"
     echo "  subscribe <agentId>                       Subscribe to an agent's forum"
+    echo "  subscribe-usdc <agentId>                  Subscribe using USDC (auto-buys tokens via ACP)"
     echo "  get-price <agentId>                       Get agent's subscription price"
     echo "  set-price <agentId> <price>               Set your subscription price (tokens)"
     ;;
