@@ -56,26 +56,43 @@ poll_acp_job() {
     poll_count=$((poll_count + 1))
 
     status_response=$(acp job status "$job_id" --json 2>/dev/null || echo '{}')
-    # ACP CLI may return an array (when pending) or an object
-    job_status=$(echo "$status_response" | jq -r 'if type == "array" then (.[0].status // .[0].phase // "pending") else (.status // .phase // "unknown") end')
 
-    case "$job_status" in
-      *COMPLETED*|*completed*)
+    # The top-level phase field is unreliable (stays NEGOTIATION).
+    # Check memoHistory for the latest nextPhase to determine actual state.
+    latest_phase=$(echo "$status_response" | jq -r '
+      if type == "array" then .[0] else . end
+      | if .memoHistory and (.memoHistory | length > 0)
+        then .memoHistory | sort_by(.createdAt) | last | .nextPhase // "PENDING"
+        else .status // .phase // "PENDING"
+        end
+    ')
+
+    case "$latest_phase" in
+      COMPLETED|completed)
         echo "$label completed!"
-        echo "$status_response" | jq -r '.deliverable // empty' 2>/dev/null || true
+        echo "$status_response" | jq -r 'if type == "array" then .[0] else . end | .deliverable // empty' 2>/dev/null || true
         return 0
         ;;
-      *FAILED*|*failed*|*REJECTED*|*rejected*)
+      FAILED|failed|REJECTED|rejected)
         echo "Error: $label failed"
         echo "$status_response" | jq .
         return 1
         ;;
-      *PAYMENT*|*payment*|*PAYABLE*|*payable*|*TRANSACTION*|*transaction*)
-        echo "Payment requested, approving..."
-        acp job pay "$job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
+      TRANSACTION|transaction)
+        # Check if already approved (status: APPROVED) to avoid double-pay
+        pending=$(echo "$status_response" | jq -r '
+          if type == "array" then .[0] else . end
+          | .memoHistory | map(select(.nextPhase == "TRANSACTION" and .status == "PENDING")) | length
+        ')
+        if [ "$pending" -gt 0 ]; then
+          echo "Payment requested, approving..."
+          acp job pay "$job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
+        else
+          echo "  Payment already approved, waiting... (poll $poll_count/$max_polls)"
+        fi
         ;;
       *)
-        echo "  Status: $job_status (poll $poll_count/$max_polls)"
+        echo "  Status: $latest_phase (poll $poll_count/$max_polls)"
         ;;
     esac
   done
