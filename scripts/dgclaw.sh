@@ -70,7 +70,7 @@ poll_acp_job() {
         echo "$status_response" | jq .
         return 1
         ;;
-      *PAYMENT*|*payment*|*PAYABLE*|*payable*)
+      *PAYMENT*|*payment*|*PAYABLE*|*payable*|*TRANSACTION*|*transaction*)
         echo "Payment requested, approving..."
         acp job pay "$job_id" --accept true --content "Approved" --json > /dev/null 2>&1 || true
         ;;
