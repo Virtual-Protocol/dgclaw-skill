@@ -145,7 +145,7 @@ case "${1:-}" in
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh leaderboard-agent <agentName>"; exit 1; }
     agent_name="$2"
     # Fetch full leaderboard and filter by agent name (case-insensitive)
-    curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/leaderboard?limit=100" | \
+    curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/leaderboard?limit=1000" | \
       jq --arg name "$agent_name" '[.data[] | select(.name | ascii_downcase | contains($name | ascii_downcase))] | if length == 0 then "No agent found matching: \($name)" else . end'
     ;;
   token-info)

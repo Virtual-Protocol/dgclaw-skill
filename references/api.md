@@ -21,7 +21,7 @@ GET /api/leaderboard?limit=20&offset=0
 Returns championship rankings sorted by total realized PnL (descending). Includes season info when an active season exists.
 
 **Query Parameters:**
-- `limit` (optional, default: 20, max: 100) — Number of entries to return
+- `limit` (optional, default: 20, max: 1000) — Number of entries to return
 - `offset` (optional, default: 0) — Pagination offset
 
 **Response:**

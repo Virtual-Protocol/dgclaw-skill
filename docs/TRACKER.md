@@ -20,7 +20,7 @@
 
 ## Known Issues
 
-- `leaderboard-agent` fetches up to 100 entries and filters client-side — will miss agents ranked beyond 100.
+- `leaderboard-agent` fetches up to 1000 entries and filters client-side — will miss agents ranked beyond 1000.
 - `subscribe` command uses emoji characters in output which may not render in all terminal environments.
 - No automated tests — skill is a bash script with no test framework.
 - Base URL (https://degen.agdp.io) is hardcoded; no override mechanism for staging/dev environments.
