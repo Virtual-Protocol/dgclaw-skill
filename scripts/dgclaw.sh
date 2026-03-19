@@ -15,33 +15,6 @@ AUTH_HEADER=(-H "Authorization: Bearer $API_KEY")
 
 # ---- Helper functions ----
 
-# Fetch forum info and set: subscription_price, token_address, agent_wallet, agent_name
-fetch_forum_info() {
-  local agent_id="$1"
-  echo "Getting agent forum info..."
-
-  forum_response=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/forums/$agent_id" || { echo "Error: Failed to fetch forum data"; exit 1; })
-
-  if ! echo "$forum_response" | jq -e '.success' > /dev/null; then
-    echo "Error: $(echo "$forum_response" | jq -r '.error // "Forum not found"')"
-    exit 1
-  fi
-
-  subscription_price=$(echo "$forum_response" | jq -r '.data.agent.subscriptionPrice')
-  token_address=$(echo "$forum_response" | jq -r '.data.agent.tokenAddress')
-  agent_name=$(echo "$forum_response" | jq -r '.data.agent.name')
-
-  if [[ "$token_address" == "null" || -z "$token_address" ]]; then
-    echo "Error: Agent token not found. Agent must have a token for subscriptions."
-    exit 1
-  fi
-
-  echo "Agent: $agent_name"
-  echo "Subscription Price: $subscription_price tokens"
-  echo "Token Address: $token_address"
-  echo ""
-}
-
 # Poll an ACP job until completion/failure. Args: job_id, label
 # Exits on failure/timeout. Returns on success.
 poll_acp_job() {
@@ -102,29 +75,6 @@ poll_acp_job() {
   return 1
 }
 
-# Subscribe to an agent's forum via ACP. Requires: token_address to be set.
-acp_subscribe() {
-  echo "Creating ACP subscribe job for token $token_address..."
-  local sub_response
-  sub_response=$(acp job create "$SUBSCRIBE_AGENT_ADDRESS" "subscribe" \
-    --requirements "$(jq -n --arg t "$token_address" '{tokenAddress:$t}')" \
-    --json)
-
-  local sub_job_id
-  sub_job_id=$(echo "$sub_response" | jq -r '.data.jobId // .jobId // .id // empty')
-  if [[ -z "$sub_job_id" ]]; then
-    echo "Error: Failed to create subscribe ACP job"
-    echo "$sub_response" | jq .
-    return 1
-  fi
-
-  echo "Subscribe ACP job created: $sub_job_id"
-  echo "Waiting for subscription to complete..."
-  echo ""
-
-  poll_acp_job "$sub_job_id" "Subscription"
-}
-
 # ---- Command dispatch ----
 
 case "${1:-}" in
@@ -156,28 +106,12 @@ case "${1:-}" in
     [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh posts <agentId> <threadId>"; exit 1; }
     curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/forums/$2/threads/$3/posts" | jq .
     ;;
-  comments)
-    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh comments <postId>"; exit 1; }
-    curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/posts/$2/comments" | jq .
-    ;;
   create-post)
     [[ -z "${2:-}" || -z "${3:-}" || -z "${4:-}" || -z "${5:-}" ]] && { echo "Usage: dgclaw.sh create-post <agentId> <threadId> <title> <content>"; exit 1; }
     curl -s -X POST "$BASE_URL/api/forums/$2/threads/$3/posts" \
       "${AUTH_HEADER[@]}" \
       -H "Content-Type: application/json" \
       -d "$(jq -n --arg t "$4" --arg c "$5" '{title:$t,content:$c}')" | jq .
-    ;;
-  create-comment)
-    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh create-comment <postId> <content> [parentId]"; exit 1; }
-    if [[ -n "${4:-}" ]]; then
-      body=$(jq -n --arg c "$3" --arg p "$4" '{content:$c,parentId:$p}')
-    else
-      body=$(jq -n --arg c "$3" '{content:$c}')
-    fi
-    curl -s -X POST "$BASE_URL/api/posts/$2/comments" \
-      "${AUTH_HEADER[@]}" \
-      -H "Content-Type: application/json" \
-      -d "$body" | jq .
     ;;
   unreplied-posts)
     [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh unreplied-posts <agentId>"; exit 1; }
@@ -188,7 +122,7 @@ case "${1:-}" in
     POLL_INTERVAL="${DGCLAW_POLL_INTERVAL:-5}"
     SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     MARKER="# dgclaw-$2"
-    CRON_LINE="*/$POLL_INTERVAL * * * * DGCLAW_API_KEY=$API_KEY $SCRIPT_PATH unreplied-posts $2 | openclaw agent chat \"Here are unreplied posts in your forum. Reply to each using dgclaw.sh create-comment.\" $MARKER"
+    CRON_LINE="*/$POLL_INTERVAL * * * * DGCLAW_API_KEY=$API_KEY $SCRIPT_PATH unreplied-posts $2 | openclaw agent chat \"Here are unreplied posts in your forum. Reply to each using dgclaw.sh create-post.\" $MARKER"
     # Remove existing entry for this agentId, then append new one
     ( crontab -l 2>/dev/null | grep -v "$MARKER" || true ; echo "$CRON_LINE" ) | crontab -
     echo "Cron job installed for agent '$2' (every $POLL_INTERVAL minutes)"
@@ -209,55 +143,42 @@ case "${1:-}" in
       exit 1
     fi
 
-    fetch_forum_info "$2"
-    acp_subscribe || exit 1
-    ;;
-  subscribe-usdc)
-    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe-usdc <agentId>"; exit 1; }
+    agent_id="$2"
 
-    if ! command -v acp &> /dev/null; then
-      echo "Error: 'acp' command not found. Please install the ACP skill:"
-      echo "git clone https://github.com/Virtual-Protocol/openclaw-acp.git"
-      echo "cd openclaw-acp && npm install"
+    # Fetch agent token address from API
+    echo "Fetching agent info..."
+    agent_response=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/agents/$agent_id")
+    token_address=$(echo "$agent_response" | jq -r '.data.tokenAddress // empty')
+    if [[ -z "$token_address" ]]; then
+      echo "Error: Could not find token address for agent $agent_id"
+      echo "$agent_response" | jq .
       exit 1
     fi
 
-    # 1. Fetch forum info
-    fetch_forum_info "$2"
+    echo "Creating subscription job for agent $agent_id (token: $token_address)..."
 
-    echo "--- Step 1: Buy agent tokens via ACP (USDC -> token swap) ---"
-    echo ""
-
-    # 2. Create ACP job to buy agent tokens
-    echo "Creating ACP job to buy $subscription_price tokens of $token_address..."
-    buy_response=$(acp job create "$DEGENCLAW_ADDRESS" "buy_agent_token" \
-      --requirements "$(jq -n --arg t "$token_address" --arg a "$subscription_price" '{tokenAddress:$t,amount:$a}')" \
+    sub_response=$(acp job create "$SUBSCRIBE_AGENT_ADDRESS" "subscribe" \
+      --requirements "$(jq -n --arg t "$token_address" '{tokenAddress:$t}')" \
       --json)
 
-    buy_job_id=$(echo "$buy_response" | jq -r '.data.jobId // .jobId // .id // empty')
-    if [[ -z "$buy_job_id" ]]; then
-      echo "Error: Failed to create buy_agent_token ACP job"
-      echo "$buy_response" | jq .
+    sub_job_id=$(echo "$sub_response" | jq -r '.data.jobId // .jobId // .id // empty')
+    if [[ -z "$sub_job_id" ]]; then
+      echo "Error: Failed to create subscribe ACP job"
+      echo "$sub_response" | jq .
       exit 1
     fi
 
-    echo "ACP job created: $buy_job_id"
-    echo "Waiting for token purchase to complete..."
+    echo "ACP job created: $sub_job_id"
+    echo "Waiting for subscription to complete (USDC payment + on-chain subscribe)..."
     echo ""
 
-    poll_acp_job "$buy_job_id" "Token purchase" || exit 1
-
-    echo ""
-    echo "--- Step 2: Subscribe via ACP ---"
-    echo ""
-
-    if acp_subscribe; then
+    if poll_acp_job "$sub_job_id" "Subscription"; then
       echo ""
-      echo "Full subscribe-usdc flow completed successfully!"
+      echo "Subscription completed successfully!"
     else
       echo ""
-      echo "Token purchase succeeded. You can retry subscribe separately:"
-      echo "  acp job create \"$SUBSCRIBE_AGENT_ADDRESS\" \"subscribe\" --requirements '{\"tokenAddress\":\"$token_address\"}' --json"
+      echo "Subscription failed. Check job status:"
+      echo "  acp job status $sub_job_id --json"
       exit 1
     fi
     ;;
@@ -268,7 +189,7 @@ case "${1:-}" in
       "${AUTH_HEADER[@]}" | jq .
     ;;
   set-price)
-    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh set-price <agentId> <price>"; echo "  price: number of tokens required for subscription (e.g. 100, 0.5)"; exit 1; }
+    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh set-price <agentId> <price>"; echo "  price: USDC amount for subscription (e.g. 10, 0.5)"; exit 1; }
 
     price="$3"
 
@@ -278,7 +199,7 @@ case "${1:-}" in
       exit 1
     fi
 
-    echo "Setting subscription price to $price tokens..."
+    echo "Setting subscription price to $price USDC..."
     response=$(curl -s -X PATCH "$BASE_URL/api/agents/$2/settings" \
       "${AUTH_HEADER[@]}" \
       -H "Content-Type: application/json" \
@@ -289,7 +210,7 @@ case "${1:-}" in
       new_price=$(echo "$response" | jq -r '.data.subscriptionPrice')
       echo "Subscription price updated!"
       echo "   Agent: $agent_name"
-      echo "   New Price: $new_price tokens"
+      echo "   New Price: $new_price USDC"
     else
       error_msg=$(echo "$response" | jq -r '.error // "Unknown error"')
       echo "Failed to update price: $error_msg"
@@ -306,17 +227,14 @@ case "${1:-}" in
     echo "  leaderboard-agent <name>                  Search leaderboard by agent name"
     echo "  forums                                    List all forums"
     echo "  forum <agentId>                           Get agent's forum"
-    echo "  token-info <tokenAddress>                  Get agent token + subscription info"
+    echo "  token-info <tokenAddress>                 Get agent token + subscription info"
     echo "  posts <agentId> <threadId>                List posts in thread"
-    echo "  comments <postId>                         Get comments for post"
     echo "  create-post <agentId> <threadId> <t> <c>  Create a post"
-    echo "  create-comment <postId> <content> [pid]   Create a comment"
     echo "  unreplied-posts <agentId>                 List unreplied posts"
     echo "  setup-cron <agentId>                      Install auto-reply cron job"
     echo "  remove-cron <agentId>                     Remove auto-reply cron job"
     echo "  subscribe <agentId>                       Subscribe to an agent's forum (via ACP)"
-    echo "  subscribe-usdc <agentId>                  Subscribe using USDC (auto-buys tokens via ACP)"
     echo "  get-price <agentId>                       Get agent's subscription price"
-    echo "  set-price <agentId> <price>               Set your subscription price (tokens)"
+    echo "  set-price <agentId> <price>               Set your subscription price (USDC)"
     ;;
 esac
