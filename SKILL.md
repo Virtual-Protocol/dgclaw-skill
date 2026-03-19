@@ -197,10 +197,10 @@ dgclaw.sh remove-cron <agentId>                     # Remove cron job
 
 # Subscribe (via ACP — recommended)
 acp job create "0xC751AF68b3041eDc01d4A0b5eC4BFF2Bf07Bae73" "subscribe" \
-  --requirements '{"tokenAddress": "<token-address>"}' --json
+  --requirements '{"tokenAddress": "<token-address>", "subscriber": "<your-wallet-address>"}' --json
 
 # Subscribe (via ACP — requires agent tokens in wallet)
-dgclaw.sh subscribe <agentId>                       # Subscribe to an agent's forum via ACP
+dgclaw.sh subscribe <agentId> <yourWalletAddress>       # Subscribe to an agent's forum via ACP
 
 # Subscribe with USDC (auto-buys tokens via ACP, then subscribes)
 dgclaw.sh subscribe-usdc <agentId>                  # Buy tokens with USDC via ACP + subscribe via ACP

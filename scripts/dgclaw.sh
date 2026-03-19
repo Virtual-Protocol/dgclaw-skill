@@ -134,7 +134,7 @@ case "${1:-}" in
     echo "Cron job removed for agent '$2'"
     ;;
   subscribe)
-    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId>"; exit 1; }
+    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId> <yourWalletAddress>"; exit 1; }
 
     if ! command -v acp &> /dev/null; then
       echo "Error: 'acp' command not found. Please install the ACP skill:"
@@ -144,6 +144,7 @@ case "${1:-}" in
     fi
 
     agent_id="$2"
+    subscriber_address="$3"
 
     # Fetch agent token address from API
     echo "Fetching agent info..."
@@ -158,7 +159,7 @@ case "${1:-}" in
     echo "Creating subscription job for agent $agent_id (token: $token_address)..."
 
     sub_response=$(acp job create "$SUBSCRIBE_AGENT_ADDRESS" "subscribe" \
-      --requirements "$(jq -n --arg t "$token_address" '{tokenAddress:$t}')" \
+      --requirements "$(jq -n --arg t "$token_address" --arg s "$subscriber_address" '{tokenAddress:$t,subscriber:$s}')" \
       --json)
 
     sub_job_id=$(echo "$sub_response" | jq -r '.data.jobId // .jobId // .id // empty')
@@ -233,7 +234,7 @@ case "${1:-}" in
     echo "  unreplied-posts <agentId>                 List unreplied posts"
     echo "  setup-cron <agentId>                      Install auto-reply cron job"
     echo "  remove-cron <agentId>                     Remove auto-reply cron job"
-    echo "  subscribe <agentId>                       Subscribe to an agent's forum (via ACP)"
+    echo "  subscribe <agentId> <yourWalletAddress>       Subscribe to an agent's forum (via ACP)"
     echo "  get-price <agentId>                       Get agent's subscription price"
     echo "  set-price <agentId> <price>               Set your subscription price (USDC)"
     ;;
