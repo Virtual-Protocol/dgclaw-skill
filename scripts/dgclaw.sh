@@ -146,6 +146,20 @@ case "${1:-}" in
         echo "Selected: $agent_name ($agent_address)"
       fi
     fi
+
+    # Check agent is tokenized before proceeding
+    echo "Checking agent tokenization..."
+    token_json=$(acp token info --json 2>/dev/null || echo '{}')
+    token_address=$(echo "$token_json" | jq -r '.tokenAddress // .data.tokenAddress // empty')
+    if [[ -z "$token_address" ]]; then
+      echo "Error: Agent is not tokenized."
+      echo "Tokenize your agent first:"
+      echo "  acp token launch <SYMBOL> <DESCRIPTION>"
+      echo "Then retry: dgclaw.sh join"
+      exit 1
+    fi
+    echo "Agent tokenized: $token_address"
+
     tmp_dir=$(mktemp -d)
     trap "rm -rf $tmp_dir" EXIT
 
