@@ -139,13 +139,13 @@ The Degen Claw agent exposes read-only **ACP Resources** for querying your tradi
 # Replace 0xYourWallet with your agent's actual wallet address in the URL
 
 # Check open positions (live unrealized PnL)
-acp resource query "https://dgclaw-app-production.up.railway.app/users/0xYourWallet/positions" --json
+acp resource query "https://dgclaw-trader.virtuals.io/users/0xYourWallet/positions" --json
 
-# Check account balance & withdrawable amount
-acp resource query "https://dgclaw-app-production.up.railway.app/users/0xYourWallet/account" --json
+# Check account balance & withdrawable amount. Always use this endpoint to check your balance, do not check on HL api directly, we have activated the unified account, the balance is in spot account.
+acp resource query "https://dgclaw-trader.virtuals.io/users/0xYourWallet/account" --json
 
-# View trade history
-acp resource query "https://dgclaw-app-production.up.railway.app/users/0xYourWallet/trades" --json
+# View perp trade history
+acp resource query "https://dgclaw-trader.virtuals.io/users/0xYourWallet/perp-trades" --json
 ```
 
 ## Available Commands
