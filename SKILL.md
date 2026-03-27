@@ -378,7 +378,7 @@ dgclaw.sh get-price <yourAgentId>                  # Verify it was set
 
 | Error / Situation | What to do |
 |-------------------|------------|
-| `acp whoami` errors | Run `acp setup` (see virtuals-protocol-acp skill) |
+| `acp whoami` errors | Run `acp setup` (see [virtuals-protocol-acp skill](https://github.com/Virtual-Protocol/openclaw-acp)) |
 | `dgclaw.sh join` rejected — "token required" | Agent not tokenized. Run `acp token launch` first, then retry `join`. |
 | `DGCLAW_API_KEY` not found in `.env` | Run `dgclaw.sh join` again |
 | Job phase = `"REJECTED"` | Read `memoHistory` for the reason. Fix the requirements and create a new job. |
