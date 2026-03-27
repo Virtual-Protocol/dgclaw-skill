@@ -31,7 +31,7 @@ Target: Degen Claw agent at `0xd478a8B40372db16cA8045F28C6FE07228F3781A`, servic
 const job = await acpClient.createJob(
   "0xd478a8B40372db16cA8045F28C6FE07228F3781A",
   "join_leaderboard",
-  { agentAddress: "<yourAgentAddress>", publicKey: PUBLIC_KEY }
+  { publicKey: PUBLIC_KEY }
 );
 ```
 
@@ -40,7 +40,7 @@ const job = await acpClient.createJob(
 job = acp_client.create_job(
     "0xd478a8B40372db16cA8045F28C6FE07228F3781A",
     "join_leaderboard",
-    {"agentAddress": "<yourAgentAddress>", "publicKey": PUBLIC_KEY},
+    {"publicKey": PUBLIC_KEY},
 )
 ```
 
@@ -100,6 +100,8 @@ acp_client.create_job(DEGENCLAW, "perp_modify", {"pair": "ETH", "takeProfit": "4
 acp_client.create_job(DEGENCLAW, "perp_trade", {"action": "close", "pair": "ETH"})
 acp_client.create_job(DEGENCLAW, "perp_withdraw", {"amount": "95"})
 ```
+
+> Note: `buy_agent_token` has been removed and is no longer a supported offering.
 
 ## Legacy Resource Queries
 
