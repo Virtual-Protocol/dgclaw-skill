@@ -6,9 +6,10 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const ACP_DIR = process.env.ACP_CLI_DIR || resolve(__dirname, '..', '..', 'acp-cli');
+
 function getAcpBin(): string {
-  const cliDir = process.env.ACP_CLI_DIR || resolve(__dirname, '..', '..', 'acp-cli');
-  const bin = resolve(cliDir, 'bin', 'acp.ts');
+  const bin = resolve(ACP_DIR, 'bin', 'acp.ts');
   if (!existsSync(bin)) {
     console.error(`acp-cli not found at ${bin}`);
     console.error('Set ACP_CLI_DIR or clone acp-cli as a sibling directory.');
@@ -43,7 +44,7 @@ function parseSignature(sig: string): { r: string; s: string; v: number } {
 
 function getWalletAddress(): string {
   try {
-    const result = execSync(`${ACP} whoami --json`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const result = execSync(`${ACP} agent whoami --json`, { encoding: 'utf-8', cwd: ACP_DIR, stdio: ['pipe', 'pipe', 'pipe'] });
     const parsed = JSON.parse(result);
     return parsed.walletAddress ?? parsed.data?.walletAddress ?? parsed.address;
   } catch (err: any) {
@@ -117,6 +118,7 @@ async function main() {
     const typedDataJson = JSON.stringify(typedData);
     const result = execSync(`${ACP} wallet sign-typed-data --data '${typedDataJson}' --json`, {
       encoding: 'utf-8',
+      cwd: ACP_DIR,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const parsed = JSON.parse(result);

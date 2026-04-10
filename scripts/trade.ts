@@ -162,7 +162,7 @@ async function openPosition(
 
   // Get current mid price for market orders
   const mids = await info.allMids();
-  const midPrice = parseFloat(mids[assetId]);
+  const midPrice = parseFloat(mids[args.pair!.toUpperCase()]);
   if (!midPrice) {
     console.error(`Could not get mid price for ${args.pair}`);
     process.exit(1);
@@ -187,12 +187,12 @@ async function openPosition(
 
   const result = await exchange.order({
     orders: [{
-      asset: assetId,
-      isBuy,
-      reduceOnly: false,
-      limitPx: orderPrice,
-      sz,
-      orderType: { limit: { tif } },
+      a: assetId,
+      b: isBuy,
+      r: false,
+      p: orderPrice,
+      s: sz,
+      t: { limit: { tif } },
     }],
     grouping: 'na',
   });
@@ -204,12 +204,12 @@ async function openPosition(
     console.log(`Setting take profit at ${args.takeProfit}...`);
     const tpResult = await exchange.order({
       orders: [{
-        asset: assetId,
-        isBuy: !isBuy,
-        reduceOnly: true,
-        limitPx: args.takeProfit,
-        sz,
-        orderType: {
+        a: assetId,
+        b: !isBuy,
+        r: true,
+        p: args.takeProfit,
+        s: sz,
+        t: {
           trigger: {
             triggerPx: args.takeProfit,
             isMarket: true,
@@ -226,12 +226,12 @@ async function openPosition(
     console.log(`Setting stop loss at ${args.stopLoss}...`);
     const slResult = await exchange.order({
       orders: [{
-        asset: assetId,
-        isBuy: !isBuy,
-        reduceOnly: true,
-        limitPx: args.stopLoss,
-        sz,
-        orderType: {
+        a: assetId,
+        b: !isBuy,
+        r: true,
+        p: args.stopLoss,
+        s: sz,
+        t: {
           trigger: {
             triggerPx: args.stopLoss,
             isMarket: true,
@@ -272,7 +272,7 @@ async function closePosition(
 
   // Market close with 1% slippage
   const mids = await info.allMids();
-  const midPrice = parseFloat(mids[assetId]);
+  const midPrice = parseFloat(mids[args.pair!.toUpperCase()]);
   const slippage = isBuy ? 1.01 : 0.99;
   const orderPrice = formatPrice(midPrice * slippage);
 
@@ -280,12 +280,12 @@ async function closePosition(
 
   const result = await exchange.order({
     orders: [{
-      asset: assetId,
-      isBuy,
-      reduceOnly: true,
-      limitPx: orderPrice,
-      sz,
-      orderType: { limit: { tif: 'Ioc' } },
+      a: assetId,
+      b: isBuy,
+      r: true,
+      p: orderPrice,
+      s: sz,
+      t: { limit: { tif: 'Ioc' } },
     }],
     grouping: 'na',
   });
@@ -350,12 +350,12 @@ async function modifyPosition(
     console.log(`Setting take profit at ${args.takeProfit}...`);
     const tpResult = await exchange.order({
       orders: [{
-        asset: assetId,
-        isBuy: !isBuy,
-        reduceOnly: true,
-        limitPx: args.takeProfit,
-        sz,
-        orderType: {
+        a: assetId,
+        b: !isBuy,
+        r: true,
+        p: args.takeProfit,
+        s: sz,
+        t: {
           trigger: {
             triggerPx: args.takeProfit,
             isMarket: true,
@@ -372,12 +372,12 @@ async function modifyPosition(
     console.log(`Setting stop loss at ${args.stopLoss}...`);
     const slResult = await exchange.order({
       orders: [{
-        asset: assetId,
-        isBuy: !isBuy,
-        reduceOnly: true,
-        limitPx: args.stopLoss,
-        sz,
-        orderType: {
+        a: assetId,
+        b: !isBuy,
+        r: true,
+        p: args.stopLoss,
+        s: sz,
+        t: {
           trigger: {
             triggerPx: args.stopLoss,
             isMarket: true,
@@ -442,7 +442,7 @@ async function showTickers(info: InfoClient) {
 
   const tickers = meta.universe.map((asset: any, i: number) => ({
     symbol: asset.name,
-    midPrice: mids[i] ?? 'N/A',
+    midPrice: mids[asset.name] ?? 'N/A',
     maxLeverage: asset.maxLeverage,
     szDecimals: asset.szDecimals,
   }));

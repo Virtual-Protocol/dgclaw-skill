@@ -21,7 +21,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ACP_CLI_DIR="${ACP_CLI_DIR:-$(cd "$SKILL_DIR/../acp-cli" 2>/dev/null && pwd || echo "")}"
-ACP="npx tsx ${ACP_CLI_DIR}/bin/acp.ts"
+acp_cmd() { (cd "acp_cmd_CLI_DIR" && npx tsx "acp_cmd_CLI_DIR/bin/acp.ts" "$@"); }
 BASE_URL="${DGCLAW_BASE_URL:-https://degen.virtuals.io}"
 API_KEY="${DGCLAW_API_KEY:-}"
 DEGENCLAW_ADDRESS="0xd478a8B40372db16cA8045F28C6FE07228F3781A"
@@ -53,7 +53,7 @@ poll_acp_job() {
     sleep "$poll_interval"
     poll_count=$((poll_count + 1))
 
-    status_response=$($ACP job status "$job_id" --json 2>/dev/null || echo '{}')
+    status_response=$(acp_cmd job history --chain-id 8453 --job-id "$job_id" --json 2>/dev/null || echo '{}')
 
     # The top-level phase field is unreliable (stays NEGOTIATION).
     # Check memoHistory for the latest nextPhase to determine actual state.
@@ -83,7 +83,7 @@ poll_acp_job() {
   done
 
   echo "Error: Timed out waiting for $label ($(( max_polls * poll_interval ))s)"
-  echo "Check job status manually: $ACP job status $job_id --json"
+  echo "Check job status manually: acp_cmd job history --chain-id 8453 --job-id $job_id --json"
   return 1
 }
 
@@ -91,7 +91,7 @@ poll_acp_job() {
 
 case "${1:-}" in
   join)
-    if [[ -z "$ACP_CLI_DIR" ]]; then
+    if [[ -z "acp_cmd_CLI_DIR" ]]; then
       echo "Error: acp-cli not found. Set ACP_CLI_DIR or clone it as a sibling directory:"
       echo "  git clone https://github.com/Virtual-Protocol/acp-cli.git"
       echo "  cd acp-cli && npm install"
@@ -102,7 +102,7 @@ case "${1:-}" in
     # Get agent address: from argument, or detect from acp agent list
     agent_address="${2:-}"
     if [[ -z "$agent_address" ]]; then
-      agents_json=$($ACP agent list --json 2>/dev/null || echo '[]')
+      agents_json=$(acp_cmd agent list --json 2>/dev/null || echo '[]')
       agent_count=$(echo "$agents_json" | jq 'length')
 
       if [[ "$agent_count" -eq 0 ]]; then
@@ -139,8 +139,8 @@ case "${1:-}" in
 
     # Check agent is tokenized before proceeding
     echo "Checking agent tokenization..."
-    token_json=$($ACP token info --json 2>/dev/null || echo '{}')
-    token_address=$(echo "$token_json" | jq -r '.tokenAddress // .data.tokenAddress // empty')
+    agent_info_json=$(acp_cmd agent whoami --json 2>/dev/null || echo '{}')
+    token_address=$(echo "$agent_info_json" | jq -r '.chains[0].tokenAddress // empty')
     if [[ -z "$token_address" ]]; then
       echo "Error: Agent is not tokenized."
       echo "Tokenize your agent first:"
@@ -159,9 +159,9 @@ case "${1:-}" in
     public_key=$(grep -v '^\-\-' "$tmp_dir/public.pem" | tr -d '\n')
 
     echo "Creating join_leaderboard ACP job..."
-    job_response=$($ACP job create "$DEGENCLAW_ADDRESS" "join_leaderboard" \
+    job_response=$(acp_cmd client create-job --provider "$DEGENCLAW_ADDRESS" --offering-name "join_leaderboard" \
       --requirements "$(jq -n --arg a "$agent_address" --arg k "$public_key" '{agentAddress:$a,publicKey:$k}')" \
-      --isAutomated true --json)
+      --legacy --json)
 
     job_id=$(echo "$job_response" | jq -r '.data.jobId // .jobId // .id // empty')
     if [[ -z "$job_id" ]]; then
@@ -171,6 +171,11 @@ case "${1:-}" in
     fi
 
     echo "ACP job created: $job_id"
+
+    # Accept provider memo and fund the job
+    echo "Funding job..."
+    acp_cmd client fund --job-id "$job_id" --json 2>/dev/null || true
+
     echo "Waiting for registration..."
 
     if ! poll_acp_job "$job_id" "Registration"; then
@@ -178,7 +183,7 @@ case "${1:-}" in
     fi
 
     # Extract deliverable and decrypt API key
-    deliverable=$($ACP job status "$job_id" --json 2>/dev/null | jq -r 'if type == "array" then .[0] else . end | .deliverable // empty')
+    deliverable=$(acp_cmd job history --chain-id 8453 --job-id "$job_id" --json 2>/dev/null | jq -r 'if type == "array" then .[0] else . end | .deliverable // empty')
     encrypted_key=$(echo "$deliverable" | jq -r '.encryptedApiKey // empty')
 
     if [[ -z "$encrypted_key" ]]; then
@@ -247,7 +252,7 @@ case "${1:-}" in
     POLL_INTERVAL="${DGCLAW_POLL_INTERVAL:-5}"
     SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     MARKER="# dgclaw-$2"
-    CRON_LINE="*/$POLL_INTERVAL * * * * DGCLAW_API_KEY=$API_KEY $SCRIPT_PATH unreplied-posts $2 | $ACP agent chat \"Here are unreplied posts in your forum. Reply to each using dgclaw.sh create-post.\" $MARKER"
+    CRON_LINE="*/$POLL_INTERVAL * * * * DGCLAW_API_KEY=$API_KEY $SCRIPT_PATH unreplied-posts $2 | acp_cmd agent chat \"Here are unreplied posts in your forum. Reply to each using dgclaw.sh create-post.\" $MARKER"
     # Remove existing entry for this agentId, then append new one
     ( crontab -l 2>/dev/null | grep -v "$MARKER" || true ; echo "$CRON_LINE" ) | crontab -
     echo "Cron job installed for agent '$2' (every $POLL_INTERVAL minutes)"
@@ -261,7 +266,7 @@ case "${1:-}" in
   subscribe)
     [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId> <yourWalletAddress>"; exit 1; }
 
-    if [[ -z "$ACP_CLI_DIR" ]]; then
+    if [[ -z "acp_cmd_CLI_DIR" ]]; then
       echo "Error: acp-cli not found. Set ACP_CLI_DIR or clone it as a sibling directory:"
       echo "  git clone https://github.com/Virtual-Protocol/acp-cli.git"
       echo "  cd acp-cli && npm install"
@@ -283,9 +288,9 @@ case "${1:-}" in
 
     echo "Creating subscription job for agent $agent_id (token: $token_address)..."
 
-    sub_response=$($ACP job create "$SUBSCRIBE_AGENT_ADDRESS" "subscribe" \
+    sub_response=$(acp_cmd client create-job --provider "$SUBSCRIBE_AGENT_ADDRESS" --offering-name "subscribe" \
       --requirements "$(jq -n --arg t "$token_address" --arg s "$subscriber_address" '{tokenAddress:$t,subscriber:$s}')" \
-      --isAutomated true --json)
+      --legacy --json)
 
     sub_job_id=$(echo "$sub_response" | jq -r '.data.jobId // .jobId // .id // empty')
     if [[ -z "$sub_job_id" ]]; then
@@ -295,6 +300,11 @@ case "${1:-}" in
     fi
 
     echo "ACP job created: $sub_job_id"
+
+    # Accept provider memo and fund the job
+    echo "Funding job..."
+    acp_cmd client fund --job-id "$sub_job_id" --json 2>/dev/null || true
+
     echo "Waiting for subscription to complete (USDC payment + on-chain subscribe)..."
     echo ""
 
@@ -304,7 +314,7 @@ case "${1:-}" in
     else
       echo ""
       echo "Subscription failed. Check job status:"
-      echo "  acp job status $sub_job_id --json"
+      echo "  acp job history --chain-id 8453 --job-id $sub_job_id --json"
       exit 1
     fi
     ;;
