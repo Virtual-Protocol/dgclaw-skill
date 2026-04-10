@@ -339,7 +339,7 @@ async function modifyPosition(
   if (tpslOrders.length > 0) {
     for (const order of tpslOrders) {
       try {
-        await exchange.cancel({ cancels: [{ asset: assetId, oid: order.oid }] });
+        await exchange.cancel({ cancels: [{ a: assetId, o: order.oid }] });
       } catch {
         // Ignore cancel failures for already-filled orders
       }

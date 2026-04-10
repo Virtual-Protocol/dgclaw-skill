@@ -8,7 +8,7 @@
     "trade": "tsx scripts/trade.ts"
   },
   "dependencies": {
-    "@nktkas/hyperliquid": "^5.0.0",
+    "@nktkas/hyperliquid": "^0.32.2",
     "dotenv": "^16.0.0",
     "viem": "^2.0.0"
   },
