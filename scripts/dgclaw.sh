@@ -21,7 +21,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ACP_CLI_DIR="${ACP_CLI_DIR:-$(cd "$SKILL_DIR/../acp-cli" 2>/dev/null && pwd || echo "")}"
-acp_cmd() { (cd "acp_cmd_CLI_DIR" && npx tsx "acp_cmd_CLI_DIR/bin/acp.ts" "$@"); }
+acp_cmd() { (cd "$ACP_CLI_DIR" && npx tsx "$ACP_CLI_DIR/bin/acp.ts" "$@"); }
 BASE_URL="${DGCLAW_BASE_URL:-https://degen.virtuals.io}"
 API_KEY="${DGCLAW_API_KEY:-}"
 DEGENCLAW_ADDRESS="0xd478a8B40372db16cA8045F28C6FE07228F3781A"
@@ -91,7 +91,7 @@ poll_acp_job() {
 
 case "${1:-}" in
   join)
-    if [[ -z "acp_cmd_CLI_DIR" ]]; then
+    if [[ -z "$ACP_CLI_DIR" ]]; then
       echo "Error: acp-cli not found. Set ACP_CLI_DIR or clone it as a sibling directory:"
       echo "  git clone https://github.com/Virtual-Protocol/acp-cli.git"
       echo "  cd acp-cli && npm install"
@@ -102,24 +102,24 @@ case "${1:-}" in
     # Get agent address: from argument, or detect from acp agent list
     agent_address="${2:-}"
     if [[ -z "$agent_address" ]]; then
-      agents_json=$(acp_cmd agent list --json 2>/dev/null || echo '[]')
-      agent_count=$(echo "$agents_json" | jq 'length')
+      agents_json=$(acp_cmd agent list --json 2>/dev/null || echo '{"data":[]}')
+      agent_count=$(echo "$agents_json" | jq '.data | length')
 
       if [[ "$agent_count" -eq 0 ]]; then
         echo "Error: No agents found. Run 'acp setup' first or pass address manually:"
         echo "  dgclaw.sh join <agentAddress>"
         exit 1
       elif [[ "$agent_count" -eq 1 ]]; then
-        agent_address=$(echo "$agents_json" | jq -r '.[0].walletAddress')
-        agent_name=$(echo "$agents_json" | jq -r '.[0].name')
+        agent_address=$(echo "$agents_json" | jq -r '.data[0].walletAddress')
+        agent_name=$(echo "$agents_json" | jq -r '.data[0].name')
         echo "Using agent: $agent_name ($agent_address)"
       else
         echo "Multiple agents found. Select one:"
         echo ""
         for i in $(seq 0 $((agent_count - 1))); do
-          name=$(echo "$agents_json" | jq -r ".[$i].name")
-          addr=$(echo "$agents_json" | jq -r ".[$i].walletAddress")
-          active=$(echo "$agents_json" | jq -r ".[$i].active")
+          name=$(echo "$agents_json" | jq -r ".data[$i].name")
+          addr=$(echo "$agents_json" | jq -r ".data[$i].walletAddress")
+          active=$(echo "$agents_json" | jq -r ".data[$i].active")
           label="$name ($addr)"
           [[ "$active" == "true" ]] && label="$label *active*"
           echo "  $((i + 1))) $label"
@@ -131,8 +131,8 @@ case "${1:-}" in
           exit 1
         fi
         idx=$((selection - 1))
-        agent_address=$(echo "$agents_json" | jq -r ".[$idx].walletAddress")
-        agent_name=$(echo "$agents_json" | jq -r ".[$idx].name")
+        agent_address=$(echo "$agents_json" | jq -r ".data[$idx].walletAddress")
+        agent_name=$(echo "$agents_json" | jq -r ".data[$idx].name")
         echo "Selected: $agent_name ($agent_address)"
       fi
     fi
@@ -266,7 +266,7 @@ case "${1:-}" in
   subscribe)
     [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId> <yourWalletAddress>"; exit 1; }
 
-    if [[ -z "acp_cmd_CLI_DIR" ]]; then
+    if [[ -z "$ACP_CLI_DIR" ]]; then
       echo "Error: acp-cli not found. Set ACP_CLI_DIR or clone it as a sibling directory:"
       echo "  git clone https://github.com/Virtual-Protocol/acp-cli.git"
       echo "  cd acp-cli && npm install"
