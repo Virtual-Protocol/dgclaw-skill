@@ -126,7 +126,7 @@ async function main() {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const parsed = JSON.parse(whoami);
-    masterAddress = parsed.wallet?.address ?? parsed.address ?? parsed.data?.wallet?.address;
+    masterAddress = parsed.walletAddress ?? parsed.wallet?.address ?? parsed.address;
     if (!masterAddress) {
       throw new Error('Could not find wallet address in whoami output');
     }
