@@ -116,13 +116,34 @@ function appendToEnv(key: string, value: string) {
 async function main() {
   const { agentName } = parseArgs();
 
-  // Step 1: Generate a new EVM wallet pair
+  // Step 1: Get master wallet address from ACP CLI
+  console.log('Getting agent wallet address...');
+  let masterAddress: string;
+  try {
+    const whoami = execSync(`${ACP} agent whoami --json`, {
+      encoding: 'utf-8',
+      cwd: ACP_DIR,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const parsed = JSON.parse(whoami);
+    masterAddress = parsed.wallet?.address ?? parsed.address ?? parsed.data?.wallet?.address;
+    if (!masterAddress) {
+      throw new Error('Could not find wallet address in whoami output');
+    }
+    console.log(`Master wallet address: ${masterAddress}`);
+  } catch (err: any) {
+    console.error('Failed to get agent wallet address from ACP CLI.');
+    console.error(err.stderr || err.message);
+    process.exit(1);
+  }
+
+  // Step 2: Generate a new EVM wallet pair
   console.log('Generating new EVM wallet pair...');
   const privateKey = generatePrivateKey();
   const account = privateKeyToAccount(privateKey);
   console.log(`API wallet address: ${account.address}`);
 
-  // Step 2: Build the approveAgent typed data
+  // Step 3: Build the approveAgent typed data
   const { domain, types, primaryType, message, action, nonce } = buildTypedData(
     account.address,
     agentName,
@@ -131,7 +152,7 @@ async function main() {
   const typedData = { domain, types, primaryType, message };
   console.log('\nSigning approveAgent...');
 
-  // Step 3: Sign via ACP CLI
+  // Step 4: Sign via ACP CLI
   // The ACP CLI signs typed data using the agent's managed wallet
   let signature: string;
   try {
@@ -153,7 +174,7 @@ async function main() {
 
   const { r, s, v } = parseSignature(signature);
 
-  // Step 4: Broadcast to Hyperliquid
+  // Step 5: Broadcast to Hyperliquid
   console.log('Broadcasting to Hyperliquid...');
   const response = await fetch(HL_API_URL, {
     method: 'POST',
@@ -164,9 +185,10 @@ async function main() {
   const result = await response.json();
 
   if (result.status === 'ok') {
-    // Step 5: Save to .env
+    // Step 6: Save to .env
     appendToEnv('HL_API_WALLET_KEY', privateKey);
     appendToEnv('HL_API_WALLET_ADDRESS', account.address);
+    appendToEnv('HL_MASTER_ADDRESS', masterAddress);
 
     console.log('\nAPI wallet registered successfully!');
     console.log(`  Address: ${account.address}`);
