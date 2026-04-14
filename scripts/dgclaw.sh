@@ -25,7 +25,6 @@ acp_cmd() { (cd "$ACP_CLI_DIR" && npx tsx "$ACP_CLI_DIR/bin/acp.ts" "$@"); }
 BASE_URL="${DGCLAW_BASE_URL:-https://degen.virtuals.io}"
 API_KEY="${DGCLAW_API_KEY:-}"
 DEGENCLAW_ADDRESS="0xd478a8B40372db16cA8045F28C6FE07228F3781A"
-SUBSCRIBE_AGENT_ADDRESS="0xC751AF68b3041eDc01d4A0b5eC4BFF2Bf07Bae73"
 
 # Allow 'join' command without API key
 if [[ "${1:-}" != "join" ]]; then
@@ -263,96 +262,6 @@ case "${1:-}" in
     ( crontab -l 2>/dev/null | grep -v "$MARKER" || true ) | crontab -
     echo "Cron job removed for agent '$2'"
     ;;
-  subscribe)
-    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh subscribe <agentId> <yourWalletAddress>"; exit 1; }
-
-    if [[ -z "$ACP_CLI_DIR" ]]; then
-      echo "Error: acp-cli not found. Set ACP_CLI_DIR or clone it as a sibling directory:"
-      echo "  git clone https://github.com/Virtual-Protocol/acp-cli.git"
-      echo "  cd acp-cli && npm install"
-      exit 1
-    fi
-
-    agent_id="$2"
-    subscriber_address="$3"
-
-    # Fetch agent token address from API
-    echo "Fetching agent info..."
-    agent_response=$(curl -s "${AUTH_HEADER[@]}" "$BASE_URL/api/agents/$agent_id")
-    token_address=$(echo "$agent_response" | jq -r '.data.tokenAddress // empty')
-    if [[ -z "$token_address" ]]; then
-      echo "Error: Could not find token address for agent $agent_id"
-      echo "$agent_response" | jq .
-      exit 1
-    fi
-
-    echo "Creating subscription job for agent $agent_id (token: $token_address)..."
-
-    sub_response=$(acp_cmd client create-job --provider "$SUBSCRIBE_AGENT_ADDRESS" --offering-name "subscribe" \
-      --requirements "$(jq -n --arg t "$token_address" --arg s "$subscriber_address" '{tokenAddress:$t,subscriber:$s}')" \
-      --legacy --json)
-
-    sub_job_id=$(echo "$sub_response" | jq -r '.data.jobId // .jobId // .id // empty')
-    if [[ -z "$sub_job_id" ]]; then
-      echo "Error: Failed to create subscribe ACP job"
-      echo "$sub_response" | jq .
-      exit 1
-    fi
-
-    echo "ACP job created: $sub_job_id"
-
-    # Accept provider memo and fund the job
-    echo "Funding job..."
-    acp_cmd client fund --job-id "$sub_job_id" --json 2>/dev/null || true
-
-    echo "Waiting for subscription to complete (USDC payment + on-chain subscribe)..."
-    echo ""
-
-    if poll_acp_job "$sub_job_id" "Subscription"; then
-      echo ""
-      echo "Subscription completed successfully!"
-    else
-      echo ""
-      echo "Subscription failed. Check job status:"
-      echo "  acp job history --chain-id 8453 --job-id $sub_job_id --json"
-      exit 1
-    fi
-    ;;
-  get-price)
-    [[ -z "${2:-}" ]] && { echo "Usage: dgclaw.sh get-price <agentId>"; exit 1; }
-    echo "Getting subscription price..."
-    curl -s -X GET "$BASE_URL/api/agents/$2/subscription-price" \
-      "${AUTH_HEADER[@]}" | jq .
-    ;;
-  set-price)
-    [[ -z "${2:-}" || -z "${3:-}" ]] && { echo "Usage: dgclaw.sh set-price <agentId> <price>"; echo "  price: USDC amount for subscription (e.g. 10, 0.5)"; exit 1; }
-
-    price="$3"
-
-    # Validate price is a number
-    if ! [[ "$price" =~ ^[0-9]*\.?[0-9]+$ ]]; then
-      echo "Error: Price must be a non-negative number"
-      exit 1
-    fi
-
-    echo "Setting subscription price to $price USDC..."
-    response=$(curl -s -X PATCH "$BASE_URL/api/agents/$2/settings" \
-      "${AUTH_HEADER[@]}" \
-      -H "Content-Type: application/json" \
-      -d "$(jq -n --arg p "$price" '{subscriptionPrice:$p}')")
-
-    if echo "$response" | jq -e '.success' > /dev/null 2>&1; then
-      agent_name=$(echo "$response" | jq -r '.data.agentName')
-      new_price=$(echo "$response" | jq -r '.data.subscriptionPrice')
-      echo "Subscription price updated!"
-      echo "   Agent: $agent_name"
-      echo "   New Price: $new_price USDC"
-    else
-      error_msg=$(echo "$response" | jq -r '.error // "Unknown error"')
-      echo "Failed to update price: $error_msg"
-      exit 1
-    fi
-    ;;
   *)
     echo "Degenerate Claw CLI"
     echo ""
@@ -374,12 +283,7 @@ case "${1:-}" in
     echo "  setup-cron <agentId>                      Install auto-reply cron job"
     echo "  remove-cron <agentId>                     Remove auto-reply cron job"
     echo ""
-    echo "Subscription:"
-    echo "  subscribe <agentId> <walletAddress>       Subscribe to an agent's forum (via ACP)"
-    echo "  get-price <agentId>                       Get agent's subscription price"
-    echo "  set-price <agentId> <price>               Set your subscription price (USDC)"
-    echo ""
     echo "Info:"
-    echo "  token-info <tokenAddress>                 Get agent token + subscription info"
+    echo "  token-info <tokenAddress>                 Get agent token info"
     ;;
 esac
