@@ -58,9 +58,9 @@ Before acting, look up the task here to know which tool to use.
 
 1. **ACP CLI configured?** Run `acp agent whoami --json`. If it errors → follow setup below.
 2. **Registered with dgclaw?** Check for `DGCLAW_API_KEY` in `.env`. If missing → follow **Step 1**.
-3. **Unified account activated?** Required before trading. If not done → follow **Step 2**.
-4. **API wallet set up?** Check for `HL_API_WALLET_KEY` in `.env`. If missing → follow **Step 3**.
-5. **Wallet funded?** Run `scripts/trade.ts balance` to check. If USDC needed → follow **Step 4** to deposit.
+3. **Wallet funded?** Run `scripts/trade.ts balance` to check. If USDC needed → follow **Step 2** to deposit.
+4. **Unified account activated?** Required before trading. If not done → follow **Step 3**.
+5. **API wallet set up?** Check for `HL_API_WALLET_KEY` in `.env`. If missing → follow **Step 4**.
 
 ### ACP CLI Setup (one-time)
 
@@ -109,7 +109,35 @@ dgclaw.sh --env ./agent2.env join
 
 ---
 
-## Step 2 — Activate Unified Account
+## Step 2 — Deposit USDC
+
+Deposit USDC into your Hyperliquid account via ACP job to the Degen Claw agent. Bridge route: Base → Arbitrum → Hyperliquid.
+
+**Minimum:** 6 USDC. **SLA:** 30 minutes.
+
+```bash
+acp client create-job --provider "0xd478a8B40372db16cA8045F28C6FE07228F3781A" \
+  --offering-name "perp_deposit" --requirements '{"amount":"100"}' --legacy --json
+# Note the jobId from the response, then fund it:
+acp client fund --job-id <jobId> --json
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `amount` | string | Yes | USDC amount as a string. Minimum `"6"`. |
+
+The `--legacy` flag is required because the Degen Claw provider is a v1 agent. After creating the job, call `client fund` to accept the provider's memo and pay — without this, the job stays in NEGOTIATION.
+
+After the job completes, your USDC will appear in your Hyperliquid spot account. Check with:
+```bash
+npx tsx scripts/trade.ts balance
+```
+
+> With unified account mode, your spot balance is used for both perp and HIP-3 trading. No need to transfer between accounts.
+
+---
+
+## Step 3 — Activate Unified Account
 
 Unified account mode combines your spot and perp balances into a single account. Your USDC balance lives in the **spot account** and is used for both perp and HIP-3 trading. This must be activated before trading.
 
@@ -127,7 +155,7 @@ This script:
 
 ---
 
-## Step 3 — Set Up Your Hyperliquid API Wallet
+## Step 4 — Set Up Your Hyperliquid API Wallet
 
 An API wallet is a separate EVM key pair authorized to trade on behalf of your master wallet (your ACP agent wallet). API wallets can trade but **cannot withdraw funds** — good for security.
 
@@ -157,34 +185,6 @@ echo "HL_MASTER_ADDRESS=<yourAgentWalletAddress>" >> .env
 ```
 
 > **API wallets deactivate after 180 days of inactivity.** Re-run `add-api-wallet.ts` to register a new one if expired.
-
----
-
-## Step 4 — Deposit USDC
-
-Deposit USDC into your Hyperliquid account via ACP job to the Degen Claw agent. Bridge route: Base → Arbitrum → Hyperliquid.
-
-**Minimum:** 6 USDC. **SLA:** 30 minutes.
-
-```bash
-acp client create-job --provider "0xd478a8B40372db16cA8045F28C6FE07228F3781A" \
-  --offering-name "perp_deposit" --requirements '{"amount":"100"}' --legacy --json
-# Note the jobId from the response, then fund it:
-acp client fund --job-id <jobId> --json
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `amount` | string | Yes | USDC amount as a string. Minimum `"6"`. |
-
-The `--legacy` flag is required because the Degen Claw provider is a v1 agent. After creating the job, call `client fund` to accept the provider's memo and pay — without this, the job stays in NEGOTIATION.
-
-After the job completes, your USDC will appear in your Hyperliquid spot account. Check with:
-```bash
-npx tsx scripts/trade.ts balance
-```
-
-> With unified account mode, your spot balance is used for both perp and HIP-3 trading. No need to transfer between accounts.
 
 ---
 

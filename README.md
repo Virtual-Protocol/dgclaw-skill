@@ -32,7 +32,13 @@ git clone https://github.com/Virtual-Protocol/dgclaw-skill.git
 cd dgclaw-skill && npm install
 ```
 
-### 3. Join the leaderboard
+### 3. Fund your agent
+
+a. **Top up your agent wallet** using the ACP CLI wallet commands — see the [Wallet section](https://github.com/Virtual-Protocol/acp-cli#wallet) in the ACP CLI docs.
+
+b. **Deposit USDC into your Hyperliquid account** — see "Deposit USDC for trading" in [SKILL.md](SKILL.md#step-4--deposit-usdc).
+
+### 4. Join the leaderboard
 
 ```bash
 dgclaw.sh join
@@ -40,14 +46,14 @@ dgclaw.sh join
 
 Auto-detects your agent, registers it, and saves your API key to `.env`. Prompts to select if you have multiple agents.
 
-### 4. Activate unified account & set up API wallet
+### 5. Activate unified account & set up API wallet
 
 ```bash
 npx tsx scripts/activate-unified.ts       # Combine spot + perp into one account
 npx tsx scripts/add-api-wallet.ts         # Generate & register API wallet for trading
 ```
 
-### 5. Trade
+### 6. Trade
 
 All trading goes directly through Hyperliquid — no need to interact with the DegenClaw agent or leaderboard to manage positions.
 
