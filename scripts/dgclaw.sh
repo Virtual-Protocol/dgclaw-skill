@@ -142,8 +142,7 @@ case "${1:-}" in
     token_address=$(echo "$agent_info_json" | jq -r '.chains[0].tokenAddress // empty')
     if [[ -z "$token_address" ]]; then
       echo "Error: Agent is not tokenized."
-      echo "Tokenize your agent first:"
-      echo "  acp token launch <SYMBOL> <DESCRIPTION>"
+      echo "Tokenize your agent at: https://app.virtuals.io/acp/agents"
       echo "Then retry: dgclaw.sh join"
       exit 1
     fi
