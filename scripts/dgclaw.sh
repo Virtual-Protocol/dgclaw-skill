@@ -38,8 +38,75 @@ fi
 
 # ---- Helper functions ----
 
+# Fund an ACP job once the provider posts its notification memo. Polls
+# `acp job history` and scans each memo's content for the trigger string —
+# default "Ready to register agent on leaderboard" (the memo dgclaw posts on
+# join_leaderboard jobs). When found, fires `client fund` once.
+fund_acp_job() {
+  local job_id="$1"
+  local trigger="${2:-Ready to register agent on leaderboard}"
+  local max_attempts=40
+  local sleep_between=3
+  local attempt=0
+  local phase=""
+  local status_response=""
+
+  while (( attempt < max_attempts )); do
+    attempt=$((attempt + 1))
+
+    status_response=$(acp_cmd job history --chain-id 8453 --job-id "$job_id" --json 2>/dev/null || echo '{}')
+
+    phase=$(echo "$status_response" | jq -r '
+      if type == "array" then .[0] else . end
+      | if .memoHistory and (.memoHistory | length > 0)
+        then .memoHistory | sort_by(.createdAt) | last | .nextPhase // "PENDING"
+        else .status // .phase // "PENDING"
+        end')
+
+    case "$phase" in
+      EVALUATION|evaluation|COMPLETED|completed)
+        echo "  Job already past funding (phase: $phase), skipping fund"
+        return 0
+        ;;
+      FAILED|failed|REJECTED|rejected)
+        echo "Error: Job $job_id is in terminal state $phase — cannot fund"
+        echo "$status_response" | jq . 2>/dev/null || echo "$status_response"
+        return 1
+        ;;
+    esac
+
+    # Look for the trigger string anywhere in any memo (content/message/etc).
+    local trigger_found
+    trigger_found=$(echo "$status_response" | jq --arg t "$trigger" '
+      (if type == "array" then .[0] else . end)
+      | .memoHistory // []
+      | [.. | strings | select(contains($t))]
+      | length > 0' 2>/dev/null || echo "false")
+
+    if [[ "$trigger_found" == "true" ]]; then
+      echo "  Provider memo posted (\"$trigger\") — funding..."
+      local output err_msg
+      output=$(acp_cmd client fund --job-id "$job_id" --json 2>&1 || true)
+      err_msg=$(echo "$output" | jq -r '.error // empty' 2>/dev/null || echo "")
+      if [[ -z "$err_msg" ]]; then
+        echo "  Funded successfully"
+        return 0
+      fi
+      echo "  Fund call failed: $err_msg — retrying in ${sleep_between}s..."
+    else
+      echo "  Waiting for provider memo (phase: $phase, attempt $attempt/$max_attempts)..."
+    fi
+
+    sleep "$sleep_between"
+  done
+
+  echo "Error: Timed out waiting for trigger memo on job $job_id after $max_attempts attempts"
+  echo "Last phase: $phase"
+  echo "Check memo content: acp job history --chain-id 8453 --job-id $job_id --json"
+  return 1
+}
+
 # Poll an ACP job until completion/failure. Args: job_id, label
-# Uses --isAutomated true, so no manual payment polling is needed.
 # Exits on failure/timeout. Returns on success.
 poll_acp_job() {
   local job_id="$1"
@@ -170,9 +237,14 @@ case "${1:-}" in
 
     echo "ACP job created: $job_id"
 
-    # Accept provider memo and fund the job
+    # Accept provider memo and fund the job. Retries because the memo may not
+    # be posted the instant create-job returns.
     echo "Funding job..."
-    acp_cmd client fund --job-id "$job_id" --json 2>/dev/null || true
+    if ! fund_acp_job "$job_id"; then
+      echo "Try funding manually once the provider memo lands:"
+      echo "  acp client fund --job-id $job_id --json"
+      exit 1
+    fi
 
     echo "Waiting for registration..."
 
