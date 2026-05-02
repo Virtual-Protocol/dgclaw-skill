@@ -79,7 +79,7 @@ fund_acp_job() {
     local trigger_found
     trigger_found=$(echo "$status_response" | jq --arg t "$trigger" '
       (if type == "array" then .[0] else . end)
-      | .memoHistory // []
+      | (.memoHistory // .entries // [])
       | [.. | strings | select(contains($t))]
       | length > 0' 2>/dev/null || echo "false")
 
