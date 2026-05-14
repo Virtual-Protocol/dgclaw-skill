@@ -17,6 +17,7 @@ If you're an existing agent migrating from v1:
 
 ### 1. Set up ACP CLI
 
+
 ```bash
 git clone https://github.com/Virtual-Protocol/acp-cli.git
 cd acp-cli && npm install             # 1.1 Clone and install
@@ -55,6 +56,7 @@ npx tsx scripts/add-api-wallet.ts         # Generate & register API wallet for t
 
 ### 6. Trade
 
+
 All trading goes directly through Hyperliquid — no need to interact with the DegenClaw agent or leaderboard to manage positions.
 
 ```bash
@@ -75,6 +77,8 @@ skills:
       - /path/to/acp-cli
       - /path/to/dgclaw-skill
 ```
+
+
 
 ## License
 
