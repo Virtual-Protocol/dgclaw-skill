@@ -1,10 +1,26 @@
 import 'dotenv/config';
-import { privateKeyToAccount } from 'viem/accounts';
+import { execSync } from 'child_process';
+import { existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { HttpTransport, ExchangeClient, InfoClient } from '@nktkas/hyperliquid';
 
 // ---- Config ----
 
 const HL_API_URL = 'https://api.hyperliquid.xyz';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ACP_DIR = process.env.ACP_CLI_DIR || resolve(__dirname, '..', '..', 'acp-cli');
+
+function getAcpBin(): string {
+  const bin = resolve(ACP_DIR, 'bin', 'acp.ts');
+  if (!existsSync(bin)) {
+    console.error(`acp-cli not found at ${bin}`);
+    console.error('Set ACP_CLI_DIR or clone acp-cli as a sibling directory.');
+    process.exit(1);
+  }
+  return `npx tsx ${bin}`;
+}
 
 interface TradeArgs {
   command: string;
@@ -45,9 +61,12 @@ Options:
   --sl <px>             Stop loss trigger price
   --tp <px>             Take profit trigger price
 
+Signing:
+  Orders are signed by your ACP agent wallet via acp-cli (no API wallet needed).
+
 Environment:
-  HL_API_WALLET_KEY     API wallet private key (required)
-  HL_MASTER_ADDRESS     Master account address (required — the ACP agent wallet)
+  HL_MASTER_ADDRESS     Master account address (the ACP agent wallet). Auto-detected via acp-cli if unset.
+  ACP_CLI_DIR           Path to acp-cli repo (auto-detected as sibling dir if unset)
 
 Examples:
   npx tsx scripts/trade.ts open --pair ETH --side long --size 500 --leverage 5
@@ -450,52 +469,115 @@ async function showTickers(info: InfoClient) {
   console.log(JSON.stringify(tickers, null, 2));
 }
 
+// ---- Signing (ACP CLI, master wallet — no API wallet) ----
+
+// EIP-712 primaryType is the root struct: the one not referenced as a field
+// type by any other struct. The SDK omits it when calling an ethers-style
+// signer, but acp-cli needs it in the typed-data payload.
+function derivePrimaryType(
+  types: Record<string, Array<{ name: string; type: string }>>,
+): string {
+  const referenced = new Set<string>();
+  for (const fields of Object.values(types)) {
+    for (const f of fields) {
+      const base = f.type.replace(/(\[\d*\])+$/, '');
+      if (types[base]) referenced.add(base);
+    }
+  }
+  return Object.keys(types).find((t) => !referenced.has(t)) ?? Object.keys(types)[0];
+}
+
+// Resolve the master (ACP agent) wallet address. This is the account that
+// signs orders and whose positions/balances we read.
+function getMasterAddress(): string {
+  const env = process.env.HL_MASTER_ADDRESS;
+  if (env) return env;
+
+  const acp = getAcpBin();
+  try {
+    const result = execSync(`${acp} agent whoami --json`, {
+      encoding: 'utf-8',
+      cwd: ACP_DIR,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const parsed = JSON.parse(result);
+    const addr = parsed.walletAddress ?? parsed.data?.walletAddress ?? parsed.address;
+    if (!addr) throw new Error('no address in acp whoami output');
+    return addr;
+  } catch {
+    console.error('HL_MASTER_ADDRESS not set and could not auto-detect via acp-cli.');
+    console.error('Set HL_MASTER_ADDRESS or run: acp configure && acp agent create');
+    process.exit(1);
+  }
+}
+
+// An ethers-v6-shaped signer the Hyperliquid SDK can use. Instead of holding a
+// private key, every EIP-712 signature is delegated to the ACP CLI, which signs
+// with the agent's managed (master) wallet — same mechanism as withdraw.ts.
+// The SDK detects this as an ethers v6 signer (signTypedData arity 3 + getAddress).
+function makeAcpWallet(masterAddress: string) {
+  const acp = getAcpBin();
+  return {
+    async getAddress(): Promise<string> {
+      return masterAddress;
+    },
+    async signTypedData(domain: any, types: any, message: any): Promise<string> {
+      const typedData = {
+        domain,
+        types,
+        primaryType: derivePrimaryType(types),
+        message,
+      };
+      try {
+        const result = execSync(
+          `${acp} wallet sign-typed-data --data '${JSON.stringify(typedData)}' --json`,
+          { encoding: 'utf-8', cwd: ACP_DIR, stdio: ['pipe', 'pipe', 'pipe'] },
+        );
+        const parsed = JSON.parse(result);
+        return parsed.signature ?? parsed.data?.signature ?? result.trim();
+      } catch (err: any) {
+        console.error('Failed to sign with ACP CLI. Make sure acp-cli is configured:');
+        console.error('  acp configure && acp agent add-signer');
+        console.error(err.stderr || err.message);
+        process.exit(1);
+      }
+    },
+  };
+}
+
 // ---- Main ----
 
 async function main() {
   const args = parseArgs();
 
-  const apiWalletKey = process.env.HL_API_WALLET_KEY;
-  const masterAddress = process.env.HL_MASTER_ADDRESS;
-
-  if (!apiWalletKey) {
-    console.error('HL_API_WALLET_KEY not set. Run scripts/add-api-wallet.ts first.');
-    process.exit(1);
-  }
-  if (!masterAddress) {
-    console.error('HL_MASTER_ADDRESS not set. Set it to your ACP agent wallet address.');
-    console.error('  Find it with: acp whoami --json');
-    process.exit(1);
-  }
-
-  const account = privateKeyToAccount(apiWalletKey as `0x${string}`);
-
   const transport = new HttpTransport({ url: HL_API_URL });
   const info = new InfoClient({ transport });
-  const exchange = new ExchangeClient({
-    wallet: account,
-    transport,
-  });
+
+  // Read-only, no wallet/acp-cli required.
+  if (args.command === 'tickers') {
+    await showTickers(info);
+    return;
+  }
+
+  const masterAddress = getMasterAddress();
 
   switch (args.command) {
-    case 'open':
-      await openPosition(exchange, info, args, masterAddress);
-      break;
-    case 'close':
-      await closePosition(exchange, info, args, masterAddress);
-      break;
-    case 'modify':
-      await modifyPosition(exchange, info, args, masterAddress);
-      break;
     case 'positions':
       await showPositions(info, masterAddress);
       break;
     case 'balance':
       await showBalance(info, masterAddress);
       break;
-    case 'tickers':
-      await showTickers(info);
+    case 'open':
+    case 'close':
+    case 'modify': {
+      const wallet = makeAcpWallet(masterAddress);
+      const exchange = new ExchangeClient({ wallet: wallet as any, transport });
+      if (args.command === 'open') await openPosition(exchange, info, args, masterAddress);
+      else if (args.command === 'close') await closePosition(exchange, info, args, masterAddress);
+      else await modifyPosition(exchange, info, args, masterAddress);
       break;
+    }
     default:
       console.error(`Unknown command: ${args.command}`);
       printUsage();

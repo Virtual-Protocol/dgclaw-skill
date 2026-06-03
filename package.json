@@ -4,13 +4,11 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "add-api-wallet": "tsx scripts/add-api-wallet.ts",
     "trade": "tsx scripts/trade.ts"
   },
   "dependencies": {
     "@nktkas/hyperliquid": "^0.32.2",
-    "dotenv": "^16.0.0",
-    "viem": "^2.0.0"
+    "dotenv": "^16.0.0"
   },
   "devDependencies": {
     "tsx": "^4.0.0",
